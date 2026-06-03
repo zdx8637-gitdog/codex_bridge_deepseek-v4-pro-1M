@@ -1,0 +1,13 @@
+.env
+.env.*
+secrets/
+.paseo-sandbox/
+logs/
+node_modules/
+npm-debug.log*
+*.log
+*.sqlite
+*.sqlite3
+history.jsonl
+client.json
+clients.json
