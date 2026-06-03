@@ -13,7 +13,7 @@ function Write-Step { param([string]$M) Write-Host "[setup] $M" }
 Write-Step "Initializing sandbox in: $WorkDir"
 Write-Step "Bridge port: $BridgePort"
 
-$sandboxRoot = Join-Path $WorkDir ".paseo-sandbox"
+$sandboxRoot = Join-Path $WorkDir ".codex-deepseek-sandbox"
 $codexHome = Join-Path $sandboxRoot "codex-home"
 $logsDir = Join-Path $sandboxRoot "logs"
 $pidFile = Join-Path $sandboxRoot "bridge.pid"
@@ -24,8 +24,8 @@ $modelCatalogJsonPath = Join-Path $codexHome "model-catalog.json"
 try { New-Item -ItemType Directory -Force $codexHome, $logsDir | Out-Null } catch { throw "Failed to create directories: $_" }
 Write-Step "Directories created"
 
-function New-PaseoToken {
-  param([string]$Prefix = "paseo")
+function New-BridgeToken {
+  param([string]$Prefix = "bridge")
   $bytes = New-Object byte[] 24
   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
   try {
@@ -37,7 +37,7 @@ function New-PaseoToken {
   return "$Prefix`_$token"
 }
 
-function New-PaseoClientId {
+function New-BridgeClientId {
   $bytes = New-Object byte[] 8
   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
   try {
@@ -57,8 +57,8 @@ if (Test-Path $clientJson) {
     if (-not $ProxyKey -and $existingClient.proxyKey) { $ProxyKey = [string]$existingClient.proxyKey }
   } catch {}
 }
-if (-not $clientId) { $clientId = New-PaseoClientId }
-if (-not $ProxyKey) { $ProxyKey = New-PaseoToken -Prefix "paseo_proxy" }
+if (-not $clientId) { $clientId = New-BridgeClientId }
+if (-not $ProxyKey) { $ProxyKey = New-BridgeToken -Prefix "bridge_proxy" }
 
 $clientConfig = [ordered]@{
   clientId = $clientId
@@ -76,7 +76,7 @@ $modelCatalog = [pscustomobject]@{
     [pscustomobject]@{
       slug = "deepseek-v4-pro"
       display_name = "DeepSeek V4 Pro"
-      description = "DeepSeek V4 Pro through Paseo bridge"
+      description = "DeepSeek V4 Pro through Codex DeepSeek bridge"
       default_reasoning_level = "medium"
       supported_reasoning_levels = @(
         [pscustomobject]@{ effort = "low"; description = "Fast responses" }
@@ -130,13 +130,13 @@ $escapedWorkDir = $WorkDir.Replace('\', '\\').ToLowerInvariant()
 
 $configContent = @"
 model = "deepseek-v4-pro"
-model_provider = "paseo_local"
+model_provider = "deepseek_bridge"
 model_catalog_json = "$escapedCatalog"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 
-[model_providers.paseo_local]
-name = "paseo_local"
+[model_providers.deepseek_bridge]
+name = "deepseek_bridge"
 base_url = "http://127.0.0.1:${BridgePort}/v1"
 wire_api = "responses"
 env_key = "PHASE1_PROXY_KEY"

@@ -1,4 +1,4 @@
-# Paseo Bridge Launcher v0.1.1
+﻿# Codex DeepSeek Bridge Launcher v0.1.2
 # Double-click launcher.bat to start.
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -6,7 +6,7 @@ Add-Type -AssemblyName System.Drawing
 
 $ErrorActionPreference = "Continue"
 $scriptDir = $PSScriptRoot
-$launcherDataDir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "paseo-launcher"
+$launcherDataDir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "codex-deepseek-bridge-launcher"
 $prefsFile = Join-Path $launcherDataDir "prefs.json"
 $clientRegistryFile = Join-Path $launcherDataDir "clients.json"
 
@@ -23,7 +23,7 @@ $codexOk = $false; try { $null = codex.cmd --version 2>$null; $codexOk = $true }
 
 # ---- Build Form ----
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Paseo Bridge Launcher v0.1.1"
+$form.Text = "Codex DeepSeek Bridge Launcher v0.1.2"
 $form.Size = New-Object System.Drawing.Size(540, 400)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -148,7 +148,7 @@ function Append-Log {
   $form.Refresh()
 }
 
-function Read-PaseoClientConfig {
+function Read-BridgeClientConfig {
   param([string]$Path)
   if (-not (Test-Path $Path)) {
     throw "Client config not found: $Path"
@@ -160,7 +160,7 @@ function Read-PaseoClientConfig {
   return $client
 }
 
-function Register-PaseoBridgeClient {
+function Register-BridgeClient {
   param(
     [string]$RegistryPath,
     [string]$ClientId,
@@ -204,7 +204,7 @@ $btnLaunch.Add_Click({
   $statusBar.Text = "Starting..."
   $statusBar.ForeColor = "Black"
   $logBox.Clear()
-  Append-Log "=== Paseo Bridge Launcher v0.1.1 ==="
+  Append-Log "=== Codex DeepSeek Bridge Launcher v0.1.2 ==="
 
   try {
     $workDir = $txtWorkDir.Text.Trim()
@@ -228,7 +228,7 @@ $btnLaunch.Add_Click({
     [System.IO.File]::WriteAllText($prefsFile, ($prefs | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
 
     # Sandbox paths (computed here, not from script return value)
-    $sandboxRoot = Join-Path $workDir ".paseo-sandbox"
+    $sandboxRoot = Join-Path $workDir ".codex-deepseek-sandbox"
     $codexHome = Join-Path $sandboxRoot "codex-home"
     $clientConfigPath = Join-Path $sandboxRoot "client.json"
 
@@ -241,10 +241,10 @@ $btnLaunch.Add_Click({
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setupScript -WorkDir $workDir -BridgePort $port 2>&1 | ForEach-Object { Append-Log $_.ToString() }
     if ($LASTEXITCODE -ne 0) { throw "Sandbox setup failed (exit code $LASTEXITCODE)." }
     if (-not (Test-Path (Join-Path $codexHome "config.toml"))) { throw "Sandbox setup failed - config.toml not created." }
-    $clientConfig = Read-PaseoClientConfig -Path $clientConfigPath
+    $clientConfig = Read-BridgeClientConfig -Path $clientConfigPath
     $proxyKey = [string]$clientConfig.proxyKey
     $clientId = [string]$clientConfig.clientId
-    Register-PaseoBridgeClient -RegistryPath $clientRegistryFile -ClientId $clientId -ProxyKey $proxyKey -WorkDir $workDir
+    Register-BridgeClient -RegistryPath $clientRegistryFile -ClientId $clientId -ProxyKey $proxyKey -WorkDir $workDir
     Append-Log "Client registered: $clientId"
 
     # Phase 2: Start bridge (non-blocking - do it directly in the GUI)
@@ -273,7 +273,7 @@ $btnLaunch.Add_Click({
         }
       } catch {
         if ($_.Exception.Message -match "already running with upstream") { throw }
-        throw "Port $port is in use by PID $($oldListener.OwningProcess), but it is not a reusable Paseo bridge."
+        throw "Port $port is in use by PID $($oldListener.OwningProcess), but it is not a reusable Codex DeepSeek bridge."
       }
     }
 
@@ -293,7 +293,7 @@ $btnLaunch.Add_Click({
     $env:BRIDGE_PORT = [string]$port
     $env:UPSTREAM_MODE = "deepseek"
     $env:PHASE1_PROXY_KEY = $proxyKey
-    $env:PASEO_PROXY_KEYS_FILE = $clientRegistryFile
+    $env:CODEX_BRIDGE_PROXY_KEYS_FILE = $clientRegistryFile
     $env:PHASE_LOG_DIR = $logsDir
 
     if (-not $bridgePid) {
@@ -341,7 +341,7 @@ $btnLaunch.Add_Click({
       throw "Bridge failed to start within 20s. See logs at $logsDir"
     }
 
-    $global:PaseoBridgeInfo = @{ SandboxRoot = $sandboxRoot; Port = $port; Pid = $bridgePid; StartedByThisLauncher = $bridgeStartedByThisLauncher }
+    $global:BridgeInfo = @{ SandboxRoot = $sandboxRoot; Port = $port; Pid = $bridgePid; StartedByThisLauncher = $bridgeStartedByThisLauncher }
 
     # Phase 3: Launch Codex
     $statusBar.Text = "Step 3/3: Launching Codex terminal..."
@@ -380,15 +380,15 @@ $form.AcceptButton = $btnLaunch
 # FormClosing: stop bridge
 $form.Add_FormClosing({
   param($sender, $e)
-  if ($global:PaseoBridgeInfo) {
-    if (-not $global:PaseoBridgeInfo.StartedByThisLauncher) {
+  if ($global:BridgeInfo) {
+    if (-not $global:BridgeInfo.StartedByThisLauncher) {
       Append-Log "Leaving shared bridge running."
       return
     }
     Append-Log "Stopping bridge..."
     $stopScript = Join-Path $scriptDir "stop-bridge.ps1"
     try {
-      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopScript -SandboxRoot $global:PaseoBridgeInfo.SandboxRoot -BridgePort $global:PaseoBridgeInfo.Port 2>&1 |
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopScript -SandboxRoot $global:BridgeInfo.SandboxRoot -BridgePort $global:BridgeInfo.Port 2>&1 |
         ForEach-Object { Append-Log $_.ToString() }
     } catch {
       Append-Log "WARNING: $_"

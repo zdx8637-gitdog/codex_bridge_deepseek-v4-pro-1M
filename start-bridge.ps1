@@ -68,7 +68,7 @@ $env:BRIDGE_PORT = [string]$BridgePort
 $env:UPSTREAM_MODE = "deepseek"
 $env:PHASE1_PROXY_KEY = $ProxyKey
 $env:PHASE_LOG_DIR = $logsDir
-if ($ProxyKeysFile) { $env:PASEO_PROXY_KEYS_FILE = $ProxyKeysFile }
+if ($ProxyKeysFile) { $env:CODEX_BRIDGE_PROXY_KEYS_FILE = $ProxyKeysFile }
 
 # Ensure logs dir
 New-Item -ItemType Directory -Force $logsDir | Out-Null

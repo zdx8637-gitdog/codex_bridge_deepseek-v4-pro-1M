@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)]
   [string]$WorkDir,
   [Parameter(Mandatory = $true)]
@@ -26,9 +26,9 @@ $cmdLines = @(
 )
 
 if ($ClientConfigPath) {
-  $cmdLines += "`$paseoClient = Get-Content '$ClientConfigPath' -Raw | ConvertFrom-Json"
-  $cmdLines += "`$env:OPENAI_API_KEY = `$paseoClient.proxyKey"
-  $cmdLines += "`$env:PHASE1_PROXY_KEY = `$paseoClient.proxyKey"
+  $cmdLines += "`$bridgeClient = Get-Content '$ClientConfigPath' -Raw | ConvertFrom-Json"
+  $cmdLines += "`$env:OPENAI_API_KEY = `$bridgeClient.proxyKey"
+  $cmdLines += "`$env:PHASE1_PROXY_KEY = `$bridgeClient.proxyKey"
 } else {
   $cmdLines += "`$env:OPENAI_API_KEY = '$ProxyKey'"
   $cmdLines += "`$env:PHASE1_PROXY_KEY = '$ProxyKey'"
@@ -40,7 +40,7 @@ $cmdLines += @(
   "`$env:HTTP_PROXY = ''",
   "`$env:HTTPS_PROXY = ''",
   "`$env:ALL_PROXY = ''",
-  "Write-Host 'Paseo Bridge Codex' -ForegroundColor Cyan",
+  "Write-Host 'Codex DeepSeek Bridge' -ForegroundColor Cyan",
   "Write-Host '  CODEX_HOME: $CodexHome' -ForegroundColor DarkGray",
   "Write-Host '  Workspace:  $WorkDir' -ForegroundColor DarkGray",
   "Write-Host '  Bridge:     http://127.0.0.1:${BridgePort}/v1' -ForegroundColor DarkGray",

@@ -1,4 +1,4 @@
-# Paseo Bridge Launcher v0.1.1
+﻿# Codex DeepSeek Bridge Launcher v0.1.2
 
 A one-click Windows launcher that runs Codex through a local DeepSeek bridge in an isolated environment.
 
@@ -48,8 +48,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\launcher.ps1
 A new PowerShell terminal window opens. Codex is now running through the local bridge:
 
 ```text
-Paseo Bridge Codex
-  CODEX_HOME: {working-dir}\.paseo-sandbox\codex-home
+Codex DeepSeek Bridge
+  CODEX_HOME: {working-dir}\.codex-deepseek-sandbox\codex-home
   Workspace:  {working-dir}
   Bridge:     http://127.0.0.1:43119/v1
 ```
@@ -65,11 +65,11 @@ Paseo Bridge Codex
 
 ## Isolation
 
-- Codex uses a separate `CODEX_HOME` at `{working-dir}\.paseo-sandbox\codex-home`.
+- Codex uses a separate `CODEX_HOME` at `{working-dir}\.codex-deepseek-sandbox\codex-home`.
 - Your default `~\.codex` is not read or modified.
 - The DeepSeek API key is stored only in the bridge process environment.
-- Each sandbox has a local proxy client in `{working-dir}\.paseo-sandbox\client.json`.
-- Shared clients are registered in `%LOCALAPPDATA%\paseo-launcher\clients.json`.
+- Each sandbox has a local proxy client in `{working-dir}\.codex-deepseek-sandbox\client.json`.
+- Shared clients are registered in `%LOCALAPPDATA%\codex-deepseek-bridge-launcher\clients.json`.
 - Bridge response history and reasoning/tool-call cache are partitioned by client ID.
 - Proxy environment variables are cleared for the Codex session.
 
@@ -85,7 +85,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\test-multi-client-isol
 Expected result includes:
 
 ```json
-{"result":"PASEO_MULTI_CLIENT_ISOLATION_OK"}
+{"result":"CODEX_DEEPSEEK_MULTI_CLIENT_ISOLATION_OK"}
 ```
 
 For a running bridge:
@@ -108,11 +108,11 @@ Install the Codex CLI.
 
 **Bridge port in use**
 
-The launcher reuses a compatible shared Paseo bridge. If the existing bridge uses a different DeepSeek Base URL, stop it or change the port.
+The launcher reuses a compatible shared Codex DeepSeek bridge. If the existing bridge uses a different DeepSeek Base URL, stop it or change the port.
 
 **Bridge health check failed**
 
-Check logs at `{working-dir}\.paseo-sandbox\logs\bridge-stderr.log`.
+Check logs at `{working-dir}\.codex-deepseek-sandbox\logs\bridge-stderr.log`.
 
 ## Security
 
@@ -125,7 +125,7 @@ Check logs at `{working-dir}\.paseo-sandbox\logs\bridge-stderr.log`.
 ## Files
 
 ```text
-paseo-bridge-launcher/
+codex-deepseek-bridge-launcher/
 - launcher.ps1
 - launcher.bat
 - setup-sandbox.ps1

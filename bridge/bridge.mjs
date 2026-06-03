@@ -1,4 +1,4 @@
-import http from "node:http";
+﻿import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -14,8 +14,8 @@ const HOST = process.env.BRIDGE_HOST || "127.0.0.1";
 const BRIDGE_PORT = Number(cliArgs.port || process.env.BRIDGE_PORT || 43119);
 const MOCK_UPSTREAM_PORT = Number(process.env.MOCK_UPSTREAM_PORT || 43118);
 const PROXY_KEY = cliArgs["proxy-key"] || process.env.PHASE1_PROXY_KEY || "phase1-proxy-key";
-const PROXY_KEYS_FILE = cliArgs["proxy-keys-file"] || process.env.PASEO_PROXY_KEYS_FILE || "";
-const EXTRA_PROXY_KEYS = cliArgs["proxy-keys"] || process.env.PASEO_PROXY_KEYS || "";
+const PROXY_KEYS_FILE = cliArgs["proxy-keys-file"] || process.env.CODEX_BRIDGE_PROXY_KEYS_FILE || "";
+const EXTRA_PROXY_KEYS = cliArgs["proxy-keys"] || process.env.CODEX_BRIDGE_PROXY_KEYS || "";
 const UPSTREAM_MODE = (process.env.UPSTREAM_MODE || "deepseek").toLowerCase();
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1";
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
@@ -31,7 +31,7 @@ const UPSTREAM_RETRY_DELAY_MS = Number(process.env.UPSTREAM_RETRY_DELAY_MS || 25
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 0);
 const MOCK_FAULT = (process.env.MOCK_FAULT || "").toLowerCase();
 const MOCK_FAULT_ONCE = (process.env.MOCK_FAULT_ONCE || "").toLowerCase();
-const MOCK_FINAL_TEXT = process.env.MOCK_FINAL_TEXT || "PASEO_PHASE1_DONE";
+const MOCK_FINAL_TEXT = process.env.MOCK_FINAL_TEXT || "CODEX_DEEPSEEK_PHASE1_DONE";
 const MOCK_LONG_TEXT_LENGTH = Number(process.env.MOCK_LONG_TEXT_LENGTH || 0);
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -1034,7 +1034,7 @@ async function handleResponses(req, res) {
   if (!client) return;
   const body = await readJson(req);
   const { chatReq, toolContext } = responsesToChatRequest(body, client);
-  const trace = { traceId: body.metadata?.paseo_case_id || uid("trace"), toolContext, client };
+  const trace = { traceId: body.metadata?.bridge_case_id || uid("trace"), toolContext, client };
   bridgeLog("received /v1/responses", {
     clientId: client.id,
     model: body.model,
@@ -1235,7 +1235,7 @@ function argsForTool(tool) {
   const properties = schema.properties || {};
   const required = Array.isArray(schema.required) ? schema.required : [];
   const args = {};
-  const commandText = "echo PASEO_TOOL_OK";
+  const commandText = "echo CODEX_DEEPSEEK_TOOL_OK";
 
   if (properties.command) args.command = commandText;
   if (properties.cmd) args.cmd = commandText;
@@ -1253,7 +1253,7 @@ function argsForTool(tool) {
     } else if (prop.type === "object") {
       args[name] = {};
     } else {
-      args[name] = /command|cmd|input|script/i.test(name) ? commandText : "PASEO_TOOL_OK";
+      args[name] = /command|cmd|input|script/i.test(name) ? commandText : "CODEX_DEEPSEEK_TOOL_OK";
     }
   }
 
@@ -1304,7 +1304,7 @@ function mockStatusFromFault(fault) {
 
 function mockText() {
   if (MOCK_LONG_TEXT_LENGTH > 0) {
-    return `${MOCK_FINAL_TEXT}\n${"A".repeat(MOCK_LONG_TEXT_LENGTH)}\nPASEO_PHASE4_LONG_TEXT_END`;
+    return `${MOCK_FINAL_TEXT}\n${"A".repeat(MOCK_LONG_TEXT_LENGTH)}\nCODEX_DEEPSEEK_PHASE4_LONG_TEXT_END`;
   }
   return MOCK_FINAL_TEXT;
 }
@@ -1337,7 +1337,7 @@ async function maybeHandleMockFault(fault, res, body, model) {
       object: "chat.completion.chunk",
       created: unixNow(),
       model,
-      choices: [{ index: 0, delta: { role: "assistant", content: "PASEO_PHASE4_STREAM_BREAK_PARTIAL" }, finish_reason: null }],
+      choices: [{ index: 0, delta: { role: "assistant", content: "CODEX_DEEPSEEK_PHASE4_STREAM_BREAK_PARTIAL" }, finish_reason: null }],
     });
     res.destroy();
     return true;
@@ -1396,7 +1396,7 @@ async function handleMockChat(req, res) {
       model,
       choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
     });
-    for (const part of ["PASEO_", "PHASE1_", "DONE"]) {
+    for (const part of ["CODEX_DEEPSEEK_", "PHASE1_", "DONE"]) {
       writeChatSse(res, {
         id: uid("chatcmpl"),
         object: "chat.completion.chunk",
@@ -1548,7 +1548,7 @@ if (UPSTREAM_MODE === "mock") {
 
 const START_TIME = Date.now();
 
-await listen(bridgeServer, BRIDGE_PORT, "paseo bridge");
+await listen(bridgeServer, BRIDGE_PORT, "codex deepseek bridge");
 
 bridgeLog("started", {
   bridge: `http://${HOST}:${BRIDGE_PORT}/v1`,
@@ -1557,7 +1557,7 @@ bridgeLog("started", {
 });
 
 function gracefulShutdown() {
-  console.log("Stopping Paseo bridge");
+  console.log("Stopping Codex DeepSeek bridge");
   for (const server of servers) {
     server.close(() => {});
   }

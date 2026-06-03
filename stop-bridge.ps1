@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)]
   [string]$SandboxRoot,
   [int]$BridgePort = 43119
@@ -31,7 +31,7 @@ if ($listener) {
   if ($canStop) {
     $pids += [int]$listener.OwningProcess
   } else {
-    Write-Warning "Port $BridgePort is in use by PID $($listener.OwningProcess) but it is not a recognized Paseo bridge. Skipping."
+    Write-Warning "Port $BridgePort is in use by PID $($listener.OwningProcess) but it is not a recognized Codex DeepSeek bridge. Skipping."
   }
 }
 

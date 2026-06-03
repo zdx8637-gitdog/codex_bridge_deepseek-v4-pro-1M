@@ -1,4 +1,4 @@
-param(
+﻿param(
   [int]$BridgePort = 43129,
   [int]$MockUpstreamPort = 43130
 )
@@ -21,7 +21,7 @@ function Stop-PortListener {
   }
 }
 
-function Invoke-PaseoResponse {
+function Invoke-BridgeResponse {
   param(
     [string]$ProxyKey,
     [string]$CaseId,
@@ -33,7 +33,7 @@ function Invoke-PaseoResponse {
     model = "deepseek-v4-pro"
     stream = $false
     input = $InputText
-    metadata = @{ paseo_case_id = $CaseId }
+    metadata = @{ bridge_case_id = $CaseId }
   }
   if ($PreviousResponseId) {
     $body.previous_response_id = $PreviousResponseId
@@ -58,8 +58,8 @@ Stop-PortListener -Port $MockUpstreamPort
 
 $registryPayload = [ordered]@{
   clients = @(
-    [ordered]@{ id = "client_a"; key = "paseo_proxy_a" },
-    [ordered]@{ id = "client_b"; key = "paseo_proxy_b" }
+    [ordered]@{ id = "client_a"; key = "bridge_proxy_a" },
+    [ordered]@{ id = "client_b"; key = "bridge_proxy_b" }
   )
 } | ConvertTo-Json -Depth 5
 [System.IO.File]::WriteAllText($registry, $registryPayload, $utf8NoBom)
@@ -69,8 +69,8 @@ $env:BRIDGE_PORT = [string]$BridgePort
 $env:MOCK_UPSTREAM_PORT = [string]$MockUpstreamPort
 $env:PHASE_LOG_DIR = $logs
 $env:PHASE_TRACE_DIR = $traces
-$env:PASEO_PROXY_KEYS_FILE = $registry
-$env:MOCK_FINAL_TEXT = "PASEO_MULTI_OK"
+$env:CODEX_BRIDGE_PROXY_KEYS_FILE = $registry
+$env:MOCK_FINAL_TEXT = "CODEX_DEEPSEEK_MULTI_OK"
 
 $stdout = Join-Path $logs "stdout.log"
 $stderr = Join-Path $logs "stderr.log"
@@ -79,7 +79,7 @@ $bridge = Start-Process -FilePath "node" `
     $bridgeScript,
     "--port=$BridgePort",
     "--log-dir=$logs",
-    "--proxy-key=paseo_proxy_a",
+    "--proxy-key=bridge_proxy_a",
     "--proxy-keys-file=$registry"
   ) `
   -WindowStyle Hidden `
@@ -106,9 +106,9 @@ try {
     throw "Expected at least 2 auth clients, got $($health.auth_clients)."
   }
 
-  $a1 = Invoke-PaseoResponse -ProxyKey "paseo_proxy_a" -CaseId "A1" -InputText "client A first turn"
-  Invoke-PaseoResponse -ProxyKey "paseo_proxy_b" -CaseId "B-cross" -InputText "client B tries A previous id" -PreviousResponseId $a1.id | Out-Null
-  Invoke-PaseoResponse -ProxyKey "paseo_proxy_a" -CaseId "A2" -InputText "client A continues own previous id" -PreviousResponseId $a1.id | Out-Null
+  $a1 = Invoke-BridgeResponse -ProxyKey "bridge_proxy_a" -CaseId "A1" -InputText "client A first turn"
+  Invoke-BridgeResponse -ProxyKey "bridge_proxy_b" -CaseId "B-cross" -InputText "client B tries A previous id" -PreviousResponseId $a1.id | Out-Null
+  Invoke-BridgeResponse -ProxyKey "bridge_proxy_a" -CaseId "A2" -InputText "client A continues own previous id" -PreviousResponseId $a1.id | Out-Null
 
   $tracePath = Join-Path $traces "bridge-trace.jsonl"
   $events = Get-Content $tracePath | ForEach-Object { $_ | ConvertFrom-Json }
@@ -132,7 +132,7 @@ try {
   }
 
   [pscustomobject]@{
-    result = "PASEO_MULTI_CLIENT_ISOLATION_OK"
+    result = "CODEX_DEEPSEEK_MULTI_CLIENT_ISOLATION_OK"
     bridgePort = $BridgePort
     authClients = $health.auth_clients
     clientBMessagesWithClientAPreviousId = @($bEvent.messages).Count
