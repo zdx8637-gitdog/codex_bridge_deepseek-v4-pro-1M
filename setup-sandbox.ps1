@@ -48,25 +48,49 @@ function New-BridgeClientId {
   return "client_" + ([BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant())
 }
 
-# Preserve the local proxy client identity if the sandbox already exists.
-$clientId = $null
+function New-BridgeProjectId {
+  param([string]$Path)
+  $resolved = [System.IO.Path]::GetFullPath($Path)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($resolved.ToLowerInvariant())
+    $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant().Substring(0, 8)
+  } finally {
+    $sha.Dispose()
+  }
+  $name = Split-Path $resolved -Leaf
+  $safeName = ($name -replace '[^a-zA-Z0-9_.-]', '_')
+  if (-not $safeName) { $safeName = "project" }
+  return "project_$safeName`_$hash"
+}
+
+$projectId = $null
 if (Test-Path $clientJson) {
   try {
     $existingClient = Get-Content $clientJson -Raw | ConvertFrom-Json
-    if ($existingClient.clientId) { $clientId = [string]$existingClient.clientId }
-    if (-not $ProxyKey -and $existingClient.proxyKey) { $ProxyKey = [string]$existingClient.proxyKey }
+    if ($existingClient.projectId) { $projectId = [string]$existingClient.projectId }
   } catch {}
 }
-if (-not $clientId) { $clientId = New-BridgeClientId }
+if (-not $projectId) { $projectId = New-BridgeProjectId -Path $WorkDir }
+
+$clientId = New-BridgeClientId
+$instanceId = "instance_" + $clientId.Substring("client_".Length)
 if (-not $ProxyKey) { $ProxyKey = New-BridgeToken -Prefix "bridge_proxy" }
 
 $clientConfig = [ordered]@{
   clientId = $clientId
+  projectId = $projectId
+  instanceId = $instanceId
   proxyKey = $ProxyKey
+  workDir = [System.IO.Path]::GetFullPath($WorkDir)
+  sandboxRoot = [System.IO.Path]::GetFullPath($sandboxRoot)
+  logDir = [System.IO.Path]::GetFullPath($logsDir)
   createdAt = (Get-Date).ToString("o")
 }
 [System.IO.File]::WriteAllText($clientJson, ($clientConfig | ConvertTo-Json -Depth 5), $utf8NoBom)
+Write-Step "Project identity ready: $projectId"
 Write-Step "Client identity ready: $clientId"
+Write-Step "Instance identity ready: $instanceId"
 
 # Build model catalog directly -- no external process, pure PowerShell, ASCII-safe
 Write-Step "Building model catalog (pure PS, no external process)..."
@@ -155,4 +179,4 @@ Write-Step "Sandbox setup complete"
 Write-Step "  SandboxRoot: $sandboxRoot"
 Write-Step "  CodexHome:   $codexHome"
 
-return @{ SandboxRoot = $sandboxRoot; CodexHome = $codexHome; LogsDir = $logsDir; PidFile = $pidFile; ClientId = $clientId; ClientJson = $clientJson }
+return @{ SandboxRoot = $sandboxRoot; CodexHome = $codexHome; LogsDir = $logsDir; PidFile = $pidFile; ClientId = $clientId; ProjectId = $projectId; InstanceId = $instanceId; ClientJson = $clientJson }

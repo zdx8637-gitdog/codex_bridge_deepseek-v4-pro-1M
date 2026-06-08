@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Diagnostics
+
+- Added completion diagnostics for `finishReason`, terminal output kind, message-only endings, and message length in traces, bridge logs, and `/health`.
+
+### Reasoning Policy
+
+- Force DeepSeek thinking requests to `reasoning_effort: max` regardless of the Codex reasoning level.
+- Return DeepSeek `reasoning_content` to Codex as Responses `reasoning` output items in streaming and non-streaming responses.
+- Replay returned reasoning items when expanding `previous_response_id` so assistant tool calls carry `reasoning_content`.
+- Disable DeepSeek thinking defensively when assistant tool calls are missing replayable reasoning content.
+- Added standalone reasoning audit logs at `logs/reasoning-audit.jsonl` and `logs/reasoning-summary.json`.
+- Added a human-readable reasoning audit log at `logs/reasoning-audit.log`.
+- Exposed reasoning audit counters and last downgrade details through `/health`.
+- Added `show-reasoning-audit.ps1` for reading thinking status, downgrade counts, and downgrade samples from a work directory.
+- Return a visible bridge warning when a request must disable DeepSeek thinking, including a recommendation to start a new Codex session.
+- Added mock coverage during development for max reasoning, reasoning replay, streaming reasoning output, and missing-reasoning fallback.
+
 ## v0.1.2 - 2026-06-03
 
 ### Naming Scope
@@ -19,7 +38,7 @@
 - Added registry reload support through `--proxy-keys-file` / `CODEX_BRIDGE_PROXY_KEYS_FILE`
 - `/health` now reports `registry_enabled`, `auth_clients`, and `active_clients`
 - Launcher reuses compatible shared bridges and refuses incompatible upstream Base URLs
-- Added `test-multi-client-isolation.ps1` mock validation
+- Added mock validation for multi-client isolation
 
 ## v0.1.0 - 2026-06-02
 

@@ -165,7 +165,11 @@ function Register-BridgeClient {
     [string]$RegistryPath,
     [string]$ClientId,
     [string]$ProxyKey,
-    [string]$WorkDir
+    [string]$WorkDir,
+    [string]$ProjectId = "",
+    [string]$InstanceId = "",
+    [string]$SandboxRoot = "",
+    [string]$LogDir = ""
   )
 
   $registryDir = Split-Path $RegistryPath
@@ -186,7 +190,12 @@ function Register-BridgeClient {
   $updated += [pscustomobject]@{
     id = $ClientId
     key = $ProxyKey
+    projectId = $ProjectId
+    instanceId = $InstanceId
+    projectName = Split-Path $WorkDir -Leaf
     workDir = $WorkDir
+    sandboxRoot = $SandboxRoot
+    logDir = $LogDir
     updatedAt = (Get-Date).ToString("o")
   }
   $registry.clients = $updated
@@ -244,8 +253,21 @@ $btnLaunch.Add_Click({
     $clientConfig = Read-BridgeClientConfig -Path $clientConfigPath
     $proxyKey = [string]$clientConfig.proxyKey
     $clientId = [string]$clientConfig.clientId
-    Register-BridgeClient -RegistryPath $clientRegistryFile -ClientId $clientId -ProxyKey $proxyKey -WorkDir $workDir
+    $projectId = [string]$clientConfig.projectId
+    $instanceId = [string]$clientConfig.instanceId
+    $logsDir = Join-Path $sandboxRoot "logs"
+    Register-BridgeClient `
+      -RegistryPath $clientRegistryFile `
+      -ClientId $clientId `
+      -ProxyKey $proxyKey `
+      -WorkDir $workDir `
+      -ProjectId $projectId `
+      -InstanceId $instanceId `
+      -SandboxRoot $sandboxRoot `
+      -LogDir $logsDir
     Append-Log "Client registered: $clientId"
+    Append-Log "Project: $projectId"
+    Append-Log "Instance: $instanceId"
 
     # Phase 2: Start bridge (non-blocking - do it directly in the GUI)
     $statusBar.Text = "Step 2/3: Starting bridge..."
@@ -277,7 +299,6 @@ $btnLaunch.Add_Click({
       }
     }
 
-    $logsDir = Join-Path $sandboxRoot "logs"
     $pidFile = Join-Path $sandboxRoot "bridge.pid"
     $bridgeScript = Join-Path $scriptDir "bridge\bridge.mjs"
     if (-not (Test-Path $bridgeScript)) {
