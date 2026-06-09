@@ -2,6 +2,8 @@
 .env.*
 docs/
 test-*.ps1
+verify-*.ps1
+capture-*.ps1
 secrets/
 .codex-deepseek-sandbox/
 logs/

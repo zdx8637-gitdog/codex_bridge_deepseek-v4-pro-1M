@@ -40,6 +40,13 @@ const REASONING_STORE_FILE = path.join(STATE_DIR, "reasoning-store.jsonl");
 const COMPACTION_STORE_FILE = path.join(STATE_DIR, "compaction-store.jsonl");
 const TRACE_LOG = path.join(TRACE_DIR, "bridge-trace.jsonl");
 const TRACE_ENABLED = !/^(0|false|off)$/i.test(process.env.BRIDGE_TRACE_ENABLED || "1");
+const REASONING_SUMMARY_MODE = (
+  process.env.PASEO_REASONING_SUMMARY_MODE ||
+  process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MODE ||
+  ""
+).trim().toLowerCase();
+const MOCK_REASONING_SUMMARY = process.env.PASEO_MOCK_REASONING_SUMMARY ||
+  `PASEO_MOCK_SUMMARY_VISIBLE_BEFORE_TOOL_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}_${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 const BRIDGE_MAX_REQUEST_BYTES = Number(process.env.BRIDGE_MAX_REQUEST_BYTES || 0);
 const UPSTREAM_RETRY_COUNT = Number(process.env.UPSTREAM_RETRY_COUNT || 0);
 const UPSTREAM_RETRY_DELAY_MS = Number(process.env.UPSTREAM_RETRY_DELAY_MS || 250);
@@ -3416,8 +3423,12 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
   const finishReasoning = async () => {
     const _dbg_fr_start = Date.now(); traceLog("DEBUG_SSE_finishReasoning_START", { traceId: trace.traceId, responseId, textLen: reasoningState.text.length, added: reasoningState.added, done: reasoningState.done, outputIndex: reasoningState.outputIndex });
     fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"FINISH_REASONING_START",time:new Date().toISOString(),textLen:reasoningState.text.length,added:reasoningState.added,done:reasoningState.done})+ "\n");
+    const currentToolCalls = Array.from(toolCalls.values());
+    if (!reasoningState.added && shouldEmitMockSummaryForTools(currentToolCalls)) {
+      maybeEmitReasoningAdded();
+    }
     if (!reasoningState.added || reasoningState.done) return;
-    const displaySummary = await createReasoningDisplaySummary({ rawReasoningContent: reasoningState.text, toolCalls: Array.from(toolCalls.values()), requestBody, trace, client });
+    const displaySummary = await createReasoningDisplaySummary({ rawReasoningContent: reasoningState.text, toolCalls: currentToolCalls, requestBody, trace, client });
     const item = responseReasoningItem({ rawReasoningContent: reasoningState.text, displaySummary, status: "completed", id: reasoningState.id });
     if (displaySummary) {
     traceLog("DEBUG_SSE_emit_summary_delta", { traceId: trace.traceId, responseId, deltaLen: displaySummary.length });
@@ -3789,6 +3800,7 @@ async function chatCompletionToResponse(
   const output = [];
   const choice = upstreamJson.choices?.[0];
   const message = choice?.message || {};
+  const messageToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   const state = stateForClient(client);
 
   if (reasoningAudit?.downgraded) {
@@ -3799,26 +3811,28 @@ async function chatCompletionToResponse(
   const compactNoticeItem = responseCompactNoticeItem(storeOptions.compactInfo, "completed");
   if (compactNoticeItem) output.push(compactNoticeItem);
 
-  if (message.reasoning_content) {
-    for (const toolCall of message.tool_calls || []) {
-      state.reasoningByCallId.set(toolCall.id, message.reasoning_content);
+  if (message.reasoning_content || shouldEmitMockSummaryForTools(messageToolCalls)) {
+    if (message.reasoning_content) {
+      for (const toolCall of messageToolCalls) {
+        state.reasoningByCallId.set(toolCall.id, message.reasoning_content);
+      }
     }
     const displaySummary = await createReasoningDisplaySummary({
-      rawReasoningContent: message.reasoning_content,
-      toolCalls: message.tool_calls || [],
+      rawReasoningContent: message.reasoning_content || "",
+      toolCalls: messageToolCalls,
       requestBody,
       trace,
       client,
     });
     output.push(responseReasoningItem({
-      rawReasoningContent: message.reasoning_content,
+      rawReasoningContent: message.reasoning_content || "",
       displaySummary,
       status: "completed",
     }));
   }
 
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    for (const toolCall of message.tool_calls) {
+  if (messageToolCalls.length > 0) {
+    for (const toolCall of messageToolCalls) {
       output.push(responseToolItemFromChatCall({
         itemId: uid("fc"),
         callId: toolCall.id,
@@ -4251,22 +4265,87 @@ async function fetchSummaryChatCompletion(upstream, chatReq, timeoutMs) {
 
 function truncateText(text, maxLen) { const s = String(text || ""); return s.length <= maxLen ? s : s.slice(0, maxLen) + "..."; }
 
+function isMockReasoningSummaryMode() {
+  return REASONING_SUMMARY_MODE === "mock";
+}
+
+function toolCallDisplayName(toolCall) {
+  return toolCall?.name || toolCall?.function?.name || toolCall?.tool_name || "";
+}
+
+function shouldEmitMockSummaryForTools(toolCalls) {
+  return (
+    isMockReasoningSummaryMode() &&
+    Array.isArray(toolCalls) &&
+    toolCalls.some((toolCall) => Boolean(toolCall && (toolCall.id || toolCall.callId || toolCallDisplayName(toolCall))))
+  );
+}
+
+function codexReasoningSummaryHasVisibleBody(text) {
+  const s = String(text || "").trim();
+  const open = s.indexOf("**");
+  if (open < 0) return false;
+  const afterOpen = s.slice(open + 2);
+  const close = afterOpen.indexOf("**");
+  if (close < 0) return false;
+  const afterCloseIndex = open + 2 + close + 2;
+  return s.slice(afterCloseIndex).trim().length > 0;
+}
+
+function codexReasoningSummaryTitle(toolCalls, fallback = "Reasoning summary") {
+  const names = Array.from(new Set((toolCalls || []).map(toolCallDisplayName).filter(Boolean)));
+  if (names.length === 1) return `Preparing ${names[0]}`;
+  if (names.length > 1) return "Planning tool calls";
+  return fallback;
+}
+
+function formatCodexVisibleReasoningSummary(summary, { toolCalls = [], title = "" } = {}) {
+  const body = String(summary || "").replace(/\r\n/g, "\n").trim();
+  if (!body) return "";
+  if (codexReasoningSummaryHasVisibleBody(body)) return body;
+  return `**${title || codexReasoningSummaryTitle(toolCalls)}**\n\n${body}`;
+}
+
 async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, requestBody, trace, client }) {
+  if (shouldEmitMockSummaryForTools(toolCalls)) {
+    const displaySummary = formatCodexVisibleReasoningSummary(MOCK_REASONING_SUMMARY, {
+      toolCalls,
+      title: "PASEO mock summary",
+    });
+    traceLog("reasoning_display_summary_mock", {
+      traceId: trace?.traceId || null,
+      clientId: client?.id || null,
+      summaryChars: displaySummary.length,
+      toolCalls: (toolCalls || []).length,
+    });
+    return displaySummary;
+  }
   if (REASONING_DISPLAY === "none") return "";
   if (REASONING_DISPLAY === "status") {
-    const tc = (toolCalls || []).map(t=>t.name||"unknown").join(", ");
-    return tc ? `Using: ${tc}` : `Thinking (${(rawReasoningContent||"").length} chars)`;
+    const tc = (toolCalls || []).map(t=>toolCallDisplayName(t)||"unknown").join(", ");
+    return formatCodexVisibleReasoningSummary(
+      tc ? `Using: ${tc}` : `Thinking (${(rawReasoningContent||"").length} chars)`,
+      { toolCalls, title: codexReasoningSummaryTitle(toolCalls, "Thinking") },
+    );
   }
-  if (REASONING_DISPLAY === "raw") return truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS);
+  if (REASONING_DISPLAY === "raw") {
+    return formatCodexVisibleReasoningSummary(
+      truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS),
+      { toolCalls, title: codexReasoningSummaryTitle(toolCalls, "Raw reasoning") },
+    );
+  }
   if (!rawReasoningContent || !rawReasoningContent.trim()) return "";
-  const tcs = (toolCalls || []).map(t=>({name:t.name||"unknown",arguments_summary:truncateText(String(t.arguments||"{}"),REASONING_SUMMARY_MAX_TOOL_ARG_CHARS)}));
+  const tcs = (toolCalls || []).map(t=>({
+    name: toolCallDisplayName(t) || "unknown",
+    arguments_summary: truncateText(String(t.arguments || t.function?.arguments || "{}"), REASONING_SUMMARY_MAX_TOOL_ARG_CHARS),
+  }));
   const lastUser = (()=>{ const inp=requestBody?.input; if(typeof inp==="string") return inp; if(Array.isArray(inp)){ const l=inp[inp.length-1]; if(l?.content?.[0]?.text) return l.content[0].text; if(typeof l?.content==="string") return l.content; } return ""; })();
   const summaryInput = JSON.stringify({ raw_reasoning_content: truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS), tool_calls: tcs, latest_user_request: truncateText(lastUser, 500) });
   const chatReq = {
     model: REASONING_SUMMARY_MODEL,
     messages: [
-      { role: "system", content: "You produce concise UI summaries for a coding agent. Do not expose hidden chain-of-thought. Return only one short sentence." },
-      { role: "user", content: `Summarize the assistant reasoning for Codex UI display. Return one concise sentence. Use the same language as the latest user request when clear. Do not reveal chain-of-thought details. Do not include raw hidden reasoning. Do not include secrets, full file contents, or exact long tool arguments. Do not call tools. Input package: ${summaryInput}` },
+      { role: "system", content: "You produce concise UI summaries for a coding agent. Do not expose hidden chain-of-thought. Return only the requested markdown block." },
+      { role: "user", content: `Summarize the assistant reasoning for Codex UI display. Return exactly this format: first line a short markdown bold title like **Checking files**, then one blank line, then one concise sentence. Use the same language as the latest user request when clear. Do not reveal chain-of-thought details. Do not include raw hidden reasoning. Do not include secrets, full file contents, or exact long tool arguments. Do not call tools. Input package: ${summaryInput}` },
     ],
     stream: false, thinking: { type: "disabled" }, max_tokens: REASONING_SUMMARY_MAX_TOKENS, temperature: 0,
   };
@@ -4275,15 +4354,22 @@ async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, r
     const result = await fetchSummaryChatCompletion(upstream, chatReq, REASONING_SUMMARY_TIMEOUT_MS);
     if (result.ok && result.json) {
       const content = result.json.choices?.[0]?.message?.content || "";
-      const summary = String(content).trim().replace(/\n+/g, " ");
+      const summary = formatCodexVisibleReasoningSummary(content, {
+        toolCalls,
+        title: codexReasoningSummaryTitle(toolCalls),
+      });
       if (summary) {
         traceLog("reasoning_display_summary_created", { traceId: trace?.traceId||null, clientId: client?.id||null, responseId: uid("reasoning_summary_chat"), model: result.json.model||REASONING_SUMMARY_MODEL, rawChars: (rawReasoningContent||"").length, summaryChars: summary.length, toolCalls: tcs.length });
         return summary;
       }
     }
   } catch(e) { bridgeLog("reasoning summary failed", { error: e.message }); }
-  const tc2 = (toolCalls||[]).map(t=>t.name||"unknown").join(", ");
-  return tc2 ? `Planning: ${tc2}` : ((rawReasoningContent||"").length > 0 ? `Thinking (${(rawReasoningContent||"").length} chars)` : "");
+  const tc2 = (toolCalls||[]).map(t=>toolCallDisplayName(t)||"unknown").join(", ");
+  const fallbackSummary = tc2 ? `Planning: ${tc2}` : ((rawReasoningContent||"").length > 0 ? `Thinking (${(rawReasoningContent||"").length} chars)` : "");
+  return formatCodexVisibleReasoningSummary(fallbackSummary, {
+    toolCalls,
+    title: codexReasoningSummaryTitle(toolCalls),
+  });
 }
 
 function createBridgeServer() {
@@ -4296,6 +4382,8 @@ function createBridgeServer() {
           status: "ok",
           mode: UPSTREAM_MODE,
           upstream_base_url: DEEPSEEK_BASE_URL,
+          reasoning_summary_mode: REASONING_SUMMARY_MODE || "v4flash",
+          mock_reasoning_summary: isMockReasoningSummaryMode() ? MOCK_REASONING_SUMMARY : null,
           registry_enabled: Boolean(PROXY_KEYS_FILE),
           uptime_sec: Math.floor((Date.now() - START_TIME) / 1000),
           trace_enabled: TRACE_ENABLED,
