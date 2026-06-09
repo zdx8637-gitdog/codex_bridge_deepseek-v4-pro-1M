@@ -1755,13 +1755,12 @@ function responseReasoningItem(value, status = "completed", id = uid("rs")) {
     ? value : { rawReasoningContent: value };
   const reasoningText = String(options.rawReasoningContent || "");
   const displaySummary = String(options.displaySummary || "");
-  const itemStatus = options.status || status;
   const itemId = options.id || id;
-  return {
-    type: "reasoning", id: itemId, status: itemStatus,
-    summary: displaySummary ? [{ type: "summary_text", text: displaySummary }] : [],
-    content: reasoningText ? [{ type: "reasoning_text", text: reasoningText }] : [],
-  };
+  const item = { type: "reasoning", id: itemId };
+  if (displaySummary) item.summary = [{ type: "summary_text", text: displaySummary }];
+  else item.summary = [];
+  if (reasoningText) item.content = [{ type: "reasoning_text", text: reasoningText }];
+  return item;
 }
 function responseMessageItem(text, status = "completed", id = uid("msg"), metadata = {}) {
   const item = {
