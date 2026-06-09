@@ -3273,7 +3273,6 @@ function emitResponseOutputItemSse(res, outputIndex, item) {
     res.write(sse("response.reasoning_summary_part.added", { type: "response.reasoning_summary_part.added", item_id: item.id, output_index: outputIndex, summary_index: 0, part: { type: "summary_text", text: "" } }));
     if (summary) { res.write(sse("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", item_id: item.id, output_index: outputIndex, summary_index: 0, delta: summary })); }
     res.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: item.id, output_index: outputIndex, summary_index: 0, text: summary }));
-    res.write(sse("response.reasoning_summary_part.done", { type: "response.reasoning_summary_part.done", item_id: item.id, output_index: outputIndex, summary_index: 0, part: { type: "summary_text", text: summary } }));
     res.write(sse("response.output_item.done", { type: "response.output_item.done", output_index: outputIndex, item }));
     return;
   }
@@ -3427,7 +3426,6 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     }
     traceLog("DEBUG_SSE_emit_summary_done", { traceId: trace.traceId, responseId });
     clientRes.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, text: displaySummary }));
-    clientRes.write(sse("response.reasoning_summary_part.done", { type: "response.reasoning_summary_part.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, part: { type: "summary_text", text: displaySummary } }));
     clientRes.write(sse("response.output_item.done", { type: "response.output_item.done", output_index: reasoningState.outputIndex, item }));
     output.push({ sortIndex: reasoningState.outputIndex, item });
     traceLog("DEBUG_SSE_finishReasoning_END", { traceId: trace.traceId, responseId, elapsedMs: Date.now() - _dbg_fr_start, hasSummary: !!displaySummary, summaryLen: (displaySummary||"").length });
