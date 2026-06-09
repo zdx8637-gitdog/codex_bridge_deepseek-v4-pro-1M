@@ -3210,8 +3210,6 @@ function emitResponseOutputItemSse(res, outputIndex, item) {
   }
 
   if (item.type === "function_call") {
-    fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"SSE_EMIT_FUNCTION_CALL_ITEM",time:new Date().toISOString(),outputIndex:outputIndex})+ "
-");
     const added = itemWithStatus({ ...item, arguments: "" }, "in_progress");
     res.write(sse("response.output_item.added", {
       type: "response.output_item.added",
@@ -3270,8 +3268,6 @@ function emitResponseOutputItemSse(res, outputIndex, item) {
   }
 
   if (item.type === "reasoning") {
-    fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"SSE_EMIT_REASONING_ITEM",time:new Date().toISOString(),outputIndex:outputIndex,hasSummary:!!responseDisplayReasoningSummary(item)})+ "
-");
     const summary = responseDisplayReasoningSummary(item);
     res.write(sse("response.output_item.added", { type: "response.output_item.added", output_index: outputIndex, item: responseReasoningItem({ rawReasoningContent: "", displaySummary: "", status: "in_progress", id: item.id }) }));
     res.write(sse("response.reasoning_summary_part.added", { type: "response.reasoning_summary_part.added", item_id: item.id, output_index: outputIndex, summary_index: 0, part: { type: "summary_text", text: "" } }));
@@ -3295,7 +3291,6 @@ function emitResponseOutputItemSse(res, outputIndex, item) {
 }
 
 function writeCompletedResponseAsSse(res, response) {
-  fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"WRITE_COMPLETED_SSE_START",time:new Date().toISOString(),outputCount:response.output.length,outputTypes:response.output.map(i=>i.type).join(",")})+ "\n");
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -3783,8 +3778,6 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
 }
 
 async function chatCompletionToResponse(
-  fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"CHAT_COMPLETION_TO_RESPONSE_START",time:new Date().toISOString(),responseId:"pending"})+ "
-");
   upstreamJson,
   requestBody,
   trace,
