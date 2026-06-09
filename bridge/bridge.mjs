@@ -3378,6 +3378,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     if (call.added || !call.name) return;
     if (call.outputIndex === null || call.outputIndex === undefined) {
       call.outputIndex = outputIndex++;
+    traceLog("DEBUG_SSE_tool_assigned_index", { traceId: trace.traceId, responseId, callId: call.callId, name: call.name, outputIndex: call.outputIndex });
     }
     const item = responseToolItemFromChatCall(call, trace, "in_progress", "");
     clientRes.write(sse("response.output_item.added", {
@@ -3392,6 +3393,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     if (reasoningState.added) return;
     reasoningState.added = true;
     reasoningState.outputIndex = outputIndex++;
+    traceLog("DEBUG_SSE_reasoning_assigned_index", { traceId: trace.traceId, responseId, outputIndex: reasoningState.outputIndex });
     clientRes.write(sse("response.output_item.added", {
       type: "response.output_item.added",
       output_index: reasoningState.outputIndex,
@@ -3414,19 +3416,24 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
   };
 
   const finishReasoning = async () => {
+    const _dbg_fr_start = Date.now(); traceLog("DEBUG_SSE_finishReasoning_START", { traceId: trace.traceId, responseId, textLen: reasoningState.text.length, added: reasoningState.added, done: reasoningState.done, outputIndex: reasoningState.outputIndex });
     if (!reasoningState.added || reasoningState.done) return;
     const displaySummary = await createReasoningDisplaySummary({ rawReasoningContent: reasoningState.text, toolCalls: Array.from(toolCalls.values()), requestBody, trace, client });
     const item = responseReasoningItem({ rawReasoningContent: reasoningState.text, displaySummary, status: "completed", id: reasoningState.id });
     if (displaySummary) {
+    traceLog("DEBUG_SSE_emit_summary_delta", { traceId: trace.traceId, responseId, deltaLen: displaySummary.length });
       clientRes.write(sse("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, delta: displaySummary }));
     }
+    traceLog("DEBUG_SSE_emit_summary_done", { traceId: trace.traceId, responseId });
     clientRes.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, text: displaySummary }));
     clientRes.write(sse("response.reasoning_summary_part.done", { type: "response.reasoning_summary_part.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, part: { type: "summary_text", text: displaySummary } }));
     clientRes.write(sse("response.output_item.done", { type: "response.output_item.done", output_index: reasoningState.outputIndex, item }));
     output.push({ sortIndex: reasoningState.outputIndex, item });
+    traceLog("DEBUG_SSE_finishReasoning_END", { traceId: trace.traceId, responseId, elapsedMs: Date.now() - _dbg_fr_start, hasSummary: !!displaySummary, summaryLen: (displaySummary||"").length });
     reasoningState.done = true;
   };
   const finishTools = () => {
+    traceLog("DEBUG_SSE_finishTools_START", { traceId: trace.traceId, responseId, toolCount: toolCalls.size, completed });
     for (const [, call] of toolCalls) {
       if (call.done) continue;
       maybeEmitToolAdded(call);
@@ -3497,10 +3504,12 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
   };
 
   const finishResponse = async () => {
+    traceLog("DEBUG_SSE_finishResponse_START", { traceId: trace.traceId, responseId, sawDone, sawFinishReason, completed, finishReason });
     if (completed) return;
     completed = true;
     flushPendingContent();
     await finishReasoning();
+    traceLog("DEBUG_SSE_about_to_call_finishTools", { traceId: trace.traceId, responseId, toolCount: toolCalls.size });
     finishTools();
     finishMessage();
     const ordered = output.sort((a, b) => a.sortIndex - b.sortIndex).map((entry) => entry.item);
@@ -3644,6 +3653,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (!data) continue;
+          traceLog("DEBUG_SSE_DONE_detected", { traceId: trace.traceId, responseId, completed });
         if (data === "[DONE]") {
           sawDone = true;
           finishResponse();
@@ -3729,6 +3739,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
           }
 
           if (choice.finish_reason) {
+            traceLog("DEBUG_SSE_finish_reason_detected", { traceId: trace.traceId, responseId, finishReason: choice.finish_reason, completed });
             finishReason = choice.finish_reason;
             sawFinishReason = true;
             flushPendingContent();
