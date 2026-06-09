@@ -125,8 +125,8 @@ $modelCatalog = [pscustomobject]@{
           personality_pragmatic = ""
         }
       }
-      supports_reasoning_summaries = $false
-      default_reasoning_summary = "none"
+      supports_reasoning_summaries = $true
+      default_reasoning_summary = "auto"
       support_verbosity = $true
       default_verbosity = "low"
       apply_patch_tool_type = "freeform"
@@ -150,14 +150,20 @@ Write-Step "Model catalog written"
 # Generate config.toml
 Write-Step "Generating config.toml..."
 $escapedCatalog = $modelCatalogJsonPath.Replace('\', '\\')
+$escapedLogsDir = $logsDir.Replace('\', '\\')
 $escapedWorkDir = $WorkDir.Replace('\', '\\').ToLowerInvariant()
 
 $configContent = @"
 model = "deepseek-v4-pro"
 model_provider = "deepseek_bridge"
 model_catalog_json = "$escapedCatalog"
+log_dir = "$escapedLogsDir"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
+model_reasoning_summary = "auto"
+model_supports_reasoning_summaries = true
+hide_agent_reasoning = false
+show_raw_agent_reasoning = false
 
 [model_providers.deepseek_bridge]
 name = "deepseek_bridge"

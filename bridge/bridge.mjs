@@ -27,6 +27,12 @@ const MOCK_LOG = path.join(LOG_DIR, "mock-upstream.log");
 const REASONING_AUDIT_LOG = path.join(LOG_DIR, "reasoning-audit.jsonl");
 const REASONING_AUDIT_TEXT_LOG = path.join(LOG_DIR, "reasoning-audit.log");
 const REASONING_SUMMARY_JSON = path.join(LOG_DIR, "reasoning-summary.json");
+const REASONING_DISPLAY = process.env.CODEX_DEEPSEEK_REASONING_DISPLAY || "summarize";
+const REASONING_SUMMARY_MODEL = process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MODEL || "deepseek-v4-flash";
+const REASONING_SUMMARY_TIMEOUT_MS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_TIMEOUT_MS || 8000);
+const REASONING_SUMMARY_MAX_TOKENS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_TOKENS || 120);
+const REASONING_SUMMARY_MAX_RAW_CHARS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_RAW_CHARS || 6000);
+const REASONING_SUMMARY_MAX_TOOL_ARG_CHARS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_TOOL_ARG_CHARS || 300);
 const COMPACT_AUDIT_LOG = path.join(LOG_DIR, "compact-audit.jsonl");
 const COMPACT_AUDIT_TEXT_LOG = path.join(LOG_DIR, "compact-audit.log");
 const COMPACT_SUMMARY_JSON = path.join(LOG_DIR, "compact-summary.json");
@@ -1716,7 +1722,7 @@ function convertTools(tools = []) {
   return { chatTools, context };
 }
 
-function responseReasoningText(item) {
+function responseRawReasoningText(item) {
   if (!item || typeof item !== "object") return "";
   if (typeof item.reasoning_content === "string") return item.reasoning_content;
   const reasoning = extractTextFromReasoningLike(item.reasoning);
@@ -1724,33 +1730,39 @@ function responseReasoningText(item) {
   const reasoningDetails = extractTextFromReasoningLike(item.reasoning_details);
   if (reasoningDetails) return reasoningDetails;
   if (typeof item.text === "string") return item.text;
-
   const parts = [];
   for (const block of item.content || []) {
     if (
-      (block.type === "reasoning_text" || block.type === "output_text" || block.type === "summary_text") &&
+      (block.type === "reasoning_text" || block.type === "output_text") &&
       typeof block.text === "string"
-    ) {
-      parts.push(block.text);
-    }
+    ) { parts.push(block.text); }
   }
+  return parts.join("");
+}
+
+function responseDisplayReasoningSummary(item) {
+  if (!item || typeof item !== "object") return "";
+  const parts = [];
   for (const block of item.summary || []) {
     if (typeof block.text === "string") parts.push(block.text);
   }
   return parts.join("");
 }
 
-function responseReasoningItem(text, status = "completed", id = uid("rs")) {
-  const reasoningText = String(text || "");
+function responseReasoningText(item) { return responseRawReasoningText(item); }
+function responseReasoningItem(value, status = "completed", id = uid("rs")) {
+  const options = value && typeof value === "object" && !Array.isArray(value)
+    ? value : { rawReasoningContent: value };
+  const reasoningText = String(options.rawReasoningContent || "");
+  const displaySummary = String(options.displaySummary || "");
+  const itemStatus = options.status || status;
+  const itemId = options.id || id;
   return {
-    type: "reasoning",
-    id,
-    status,
-    summary: reasoningText ? [{ type: "summary_text", text: reasoningText }] : [],
+    type: "reasoning", id: itemId, status: itemStatus,
+    summary: displaySummary ? [{ type: "summary_text", text: displaySummary }] : [],
     content: reasoningText ? [{ type: "reasoning_text", text: reasoningText }] : [],
   };
 }
-
 function responseMessageItem(text, status = "completed", id = uid("msg"), metadata = {}) {
   const item = {
     type: "message",
@@ -2339,10 +2351,10 @@ function responsesToChatRequest(body, client) {
           arguments: canonicalChatArguments(item.arguments),
         },
       });
-      const itemReasoning = responseReasoningText(item);
+      const itemReasoning = responseRawReasoningText(item);
       if (itemReasoning) pendingReasoningContent = itemReasoning;
     } else if (type === "reasoning") {
-      const reasoning = responseReasoningText(item);
+      const reasoning = responseRawReasoningText(item);
       if (reasoning) pendingReasoningContent = reasoning;
     } else if (type === "function_call_output") {
       flushToolCalls();
@@ -2360,7 +2372,7 @@ function responsesToChatRequest(body, client) {
           arguments: customArgumentsFromInput(item.input || ""),
         },
       });
-      const itemReasoning = responseReasoningText(item);
+      const itemReasoning = responseRawReasoningText(item);
       if (itemReasoning) pendingReasoningContent = itemReasoning;
     } else if (type === "tool_search_call") {
       pendingToolCalls.push({
@@ -2371,7 +2383,7 @@ function responsesToChatRequest(body, client) {
           arguments: canonicalChatArguments(item.arguments && typeof item.arguments === "object" ? item.arguments : {}),
         },
       });
-      const itemReasoning = responseReasoningText(item);
+      const itemReasoning = responseRawReasoningText(item);
       if (itemReasoning) pendingReasoningContent = itemReasoning;
     } else if (type === "custom_tool_call_output") {
       flushToolCalls();
@@ -2478,11 +2490,7 @@ function restoredToolContext(chatName, trace) {
 function responseToolItemFromChatCall(call, trace, status = "completed", argumentsOverride = null) {
   const ctx = restoredToolContext(call.name, trace);
   const argumentsText = argumentsOverride ?? call.arguments ?? "{}";
-  const attachReasoning = (item) => {
-    const reasoning = String(call.reasoningContent || "").trim();
-    if (reasoning) item.reasoning_content = reasoning;
-    return item;
-  };
+  const attachReasoning = (item) => { return item; };
 
   if (ctx?.kind === "tool_search") {
     return attachReasoning({
@@ -3259,6 +3267,17 @@ function emitResponseOutputItemSse(res, outputIndex, item) {
     return;
   }
 
+  if (item.type === "reasoning") {
+    const summary = responseDisplayReasoningSummary(item);
+    res.write(sse("response.output_item.added", { type: "response.output_item.added", output_index: outputIndex, item: responseReasoningItem({ rawReasoningContent: "", displaySummary: "", status: "in_progress", id: item.id }) }));
+    res.write(sse("response.reasoning_summary_part.added", { type: "response.reasoning_summary_part.added", item_id: item.id, output_index: outputIndex, summary_index: 0, part: { type: "summary_text", text: "" } }));
+    if (summary) { res.write(sse("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", item_id: item.id, output_index: outputIndex, summary_index: 0, delta: summary })); }
+    res.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: item.id, output_index: outputIndex, summary_index: 0, text: summary }));
+    res.write(sse("response.reasoning_summary_part.done", { type: "response.reasoning_summary_part.done", item_id: item.id, output_index: outputIndex, summary_index: 0, part: { type: "summary_text", text: summary } }));
+    res.write(sse("response.output_item.done", { type: "response.output_item.done", output_index: outputIndex, item }));
+    return;
+  }
+
   res.write(sse("response.output_item.added", {
     type: "response.output_item.added",
     output_index: outputIndex,
@@ -3357,6 +3376,9 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
 
   const maybeEmitToolAdded = (call) => {
     if (call.added || !call.name) return;
+    if (call.outputIndex === null || call.outputIndex === undefined) {
+      call.outputIndex = outputIndex++;
+    }
     const item = responseToolItemFromChatCall(call, trace, "in_progress", "");
     clientRes.write(sse("response.output_item.added", {
       type: "response.output_item.added",
@@ -3389,41 +3411,21 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     maybeEmitReasoningAdded();
     reasoningState.text += delta;
     reasoningContent += delta;
-    clientRes.write(sse("response.reasoning_summary_text.delta", {
-      type: "response.reasoning_summary_text.delta",
-      item_id: reasoningState.id,
-      output_index: reasoningState.outputIndex,
-      summary_index: 0,
-      delta,
-    }));
   };
 
-  const finishReasoning = () => {
+  const finishReasoning = async () => {
     if (!reasoningState.added || reasoningState.done) return;
-    const item = responseReasoningItem(reasoningState.text, "completed", reasoningState.id);
-    clientRes.write(sse("response.reasoning_summary_text.done", {
-      type: "response.reasoning_summary_text.done",
-      item_id: reasoningState.id,
-      output_index: reasoningState.outputIndex,
-      summary_index: 0,
-      text: reasoningState.text,
-    }));
-    clientRes.write(sse("response.reasoning_summary_part.done", {
-      type: "response.reasoning_summary_part.done",
-      item_id: reasoningState.id,
-      output_index: reasoningState.outputIndex,
-      summary_index: 0,
-      part: { type: "summary_text", text: reasoningState.text },
-    }));
-    clientRes.write(sse("response.output_item.done", {
-      type: "response.output_item.done",
-      output_index: reasoningState.outputIndex,
-      item,
-    }));
+    const displaySummary = await createReasoningDisplaySummary({ rawReasoningContent: reasoningState.text, toolCalls: Array.from(toolCalls.values()), requestBody, trace, client });
+    const item = responseReasoningItem({ rawReasoningContent: reasoningState.text, displaySummary, status: "completed", id: reasoningState.id });
+    if (displaySummary) {
+      clientRes.write(sse("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, delta: displaySummary }));
+    }
+    clientRes.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, text: displaySummary }));
+    clientRes.write(sse("response.reasoning_summary_part.done", { type: "response.reasoning_summary_part.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, part: { type: "summary_text", text: displaySummary } }));
+    clientRes.write(sse("response.output_item.done", { type: "response.output_item.done", output_index: reasoningState.outputIndex, item }));
     output.push({ sortIndex: reasoningState.outputIndex, item });
     reasoningState.done = true;
   };
-
   const finishTools = () => {
     for (const [, call] of toolCalls) {
       if (call.done) continue;
@@ -3494,11 +3496,11 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     messageState.done = true;
   };
 
-  const finishResponse = () => {
+  const finishResponse = async () => {
     if (completed) return;
     completed = true;
     flushPendingContent();
-    finishReasoning();
+    await finishReasoning();
     finishTools();
     finishMessage();
     const ordered = output.sort((a, b) => a.sortIndex - b.sortIndex).map((entry) => entry.item);
@@ -3730,7 +3732,6 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
             finishReason = choice.finish_reason;
             sawFinishReason = true;
             flushPendingContent();
-            if (choice.finish_reason === "tool_calls") finishTools();
           }
         }
       }
@@ -3790,7 +3791,18 @@ async function chatCompletionToResponse(
     for (const toolCall of message.tool_calls || []) {
       state.reasoningByCallId.set(toolCall.id, message.reasoning_content);
     }
-    output.push(responseReasoningItem(message.reasoning_content, "completed"));
+    const displaySummary = await createReasoningDisplaySummary({
+      rawReasoningContent: message.reasoning_content,
+      toolCalls: message.tool_calls || [],
+      requestBody,
+      trace,
+      client,
+    });
+    output.push(responseReasoningItem({
+      rawReasoningContent: message.reasoning_content,
+      displaySummary,
+      status: "completed",
+    }));
   }
 
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
@@ -4210,6 +4222,56 @@ function chatCompletionsUrlFromBase(baseUrl) {
   if (lower.endsWith("/chat/completions")) return trimmed;
   if (lower.endsWith("/v1")) return `${trimmed}/chat/completions`;
   return `${trimmed}/v1/chat/completions`;
+}
+
+async function fetchSummaryChatCompletion(upstream, chatReq, timeoutMs) {
+  const body = JSON.stringify(chatReq);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || REASONING_SUMMARY_TIMEOUT_MS);
+  try {
+    const res = await fetch(upstream.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.key}` }, body, signal: controller.signal });
+    const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch {}
+    return { ok: res.ok, status: res.status, text, json };
+  } catch (error) {
+    return { ok: false, status: error.name === "AbortError" ? 504 : 502, text: error.message, json: null };
+  } finally { clearTimeout(timer); }
+}
+
+function truncateText(text, maxLen) { const s = String(text || ""); return s.length <= maxLen ? s : s.slice(0, maxLen) + "..."; }
+
+async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, requestBody, trace, client }) {
+  if (REASONING_DISPLAY === "none") return "";
+  if (REASONING_DISPLAY === "status") {
+    const tc = (toolCalls || []).map(t=>t.name||"unknown").join(", ");
+    return tc ? `Using: ${tc}` : `Thinking (${(rawReasoningContent||"").length} chars)`;
+  }
+  if (REASONING_DISPLAY === "raw") return truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS);
+  if (!rawReasoningContent || !rawReasoningContent.trim()) return "";
+  const tcs = (toolCalls || []).map(t=>({name:t.name||"unknown",arguments_summary:truncateText(String(t.arguments||"{}"),REASONING_SUMMARY_MAX_TOOL_ARG_CHARS)}));
+  const lastUser = (()=>{ const inp=requestBody?.input; if(typeof inp==="string") return inp; if(Array.isArray(inp)){ const l=inp[inp.length-1]; if(l?.content?.[0]?.text) return l.content[0].text; if(typeof l?.content==="string") return l.content; } return ""; })();
+  const summaryInput = JSON.stringify({ raw_reasoning_content: truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS), tool_calls: tcs, latest_user_request: truncateText(lastUser, 500) });
+  const chatReq = {
+    model: REASONING_SUMMARY_MODEL,
+    messages: [
+      { role: "system", content: "You produce concise UI summaries for a coding agent. Do not expose hidden chain-of-thought. Return only one short sentence." },
+      { role: "user", content: `Summarize the assistant reasoning for Codex UI display. Return one concise sentence. Use the same language as the latest user request when clear. Do not reveal chain-of-thought details. Do not include raw hidden reasoning. Do not include secrets, full file contents, or exact long tool arguments. Do not call tools. Input package: ${summaryInput}` },
+    ],
+    stream: false, thinking: { type: "disabled" }, max_tokens: REASONING_SUMMARY_MAX_TOKENS, temperature: 0,
+  };
+  try {
+    const upstream = upstreamForMode();
+    const result = await fetchSummaryChatCompletion(upstream, chatReq, REASONING_SUMMARY_TIMEOUT_MS);
+    if (result.ok && result.json) {
+      const content = result.json.choices?.[0]?.message?.content || "";
+      const summary = String(content).trim().replace(/\n+/g, " ");
+      if (summary) {
+        traceLog("reasoning_display_summary_created", { traceId: trace?.traceId||null, clientId: client?.id||null, responseId: uid("reasoning_summary_chat"), model: result.json.model||REASONING_SUMMARY_MODEL, rawChars: (rawReasoningContent||"").length, summaryChars: summary.length, toolCalls: tcs.length });
+        return summary;
+      }
+    }
+  } catch(e) { bridgeLog("reasoning summary failed", { error: e.message }); }
+  const tc2 = (toolCalls||[]).map(t=>t.name||"unknown").join(", ");
+  return tc2 ? `Planning: ${tc2}` : ((rawReasoningContent||"").length > 0 ? `Thinking (${(rawReasoningContent||"").length} chars)` : "");
 }
 
 function createBridgeServer() {

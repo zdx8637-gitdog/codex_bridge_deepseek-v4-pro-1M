@@ -18,6 +18,11 @@
 - Added `show-reasoning-audit.ps1` for reading thinking status, downgrade counts, and downgrade samples from a work directory.
 - Return a visible bridge warning when a request must disable DeepSeek thinking, including a recommendation to start a new Codex session.
 - Added mock coverage during development for max reasoning, reasoning replay, streaming reasoning output, and missing-reasoning fallback.
+- Split raw DeepSeek reasoning from Codex-facing reasoning summaries so `summary` is UI-only and `content` remains raw replay material.
+- Removed new Codex-facing `reasoning_content` fields from tool-call items while keeping legacy history replay compatibility.
+- Added bridge-side `deepseek-v4-flash` summary generation with thinking disabled, bounded input, short timeout, and non-fatal fallback.
+- Added regression coverage proving generated UI summaries are not replayed into DeepSeek `reasoning_content` and raw reasoning is replayed exactly once.
+- Delayed streaming tool-call UI events until after reasoning summary events so Codex can render the summary before tool execution.
 
 ## v0.1.2 - 2026-06-03
 
