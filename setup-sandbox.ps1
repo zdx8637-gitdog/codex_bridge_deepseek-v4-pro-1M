@@ -1,4 +1,4 @@
-﻿param(
+param(
   [Parameter(Mandatory = $true)]
   [string]$WorkDir,
   [int]$BridgePort = 43119,
@@ -163,6 +163,7 @@ model_auto_compact_token_limit = 900000
 model_reasoning_summary = "auto"
 model_supports_reasoning_summaries = true
 hide_agent_reasoning = false
+use_experimental_reasoning_summary = true
 show_raw_agent_reasoning = false
 
 [model_providers.deepseek_bridge]
