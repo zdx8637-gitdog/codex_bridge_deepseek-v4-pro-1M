@@ -1,4 +1,4 @@
-﻿# Codex DeepSeek Bridge — Reasoning Summary 修复全记录
+# Codex DeepSeek Bridge — Reasoning Summary 修复全记录
 
 ## 概述
 
@@ -98,6 +98,14 @@
 **后果**：生成的 JavaScript 语法错误（字符串跨行断裂）  
 **修复**：手动修复断裂的行合并
 
+### 错误 8：修改后未重启 bridge 就测试
+
+**时间**：多次修改 esponseReasoningItem 和 SSE 事件格式后  
+**操作**：修改磁盘文件后直接通过 Invoke-WebRequest 测试  
+**后果**：测试结果反映的是旧代码行为（bridge 进程未重启），导致错误判断修改是否生效  
+**教训**：修改 bridge 代码后必须先重启 bridge 进程，磁盘修改不会热加载
+
+
 ### 错误 7：`fs.appendFileSync` 行插入位置错误
 
 **时间**：添加 debug trace 到 `chatCompletionToResponse`  
@@ -147,6 +155,13 @@
 ## 相关 Git 提交
 
 ```
+536d1fd fix: remove status and content from reasoning items to match OpenAI API format
+74dad12 fix: remove response.reasoning_summary_part.done event that may corrupt Codex parser state
+1040dc5 debug: SSE event order traces
+95943dd debug: add traces to non-streaming path
+d305aa1 debug: add direct fs.appendFileSync
+2a36b79 debug: add SSE event order traces
+011dbed fix: reasoning summary display
 e2cf38a fix: remove reasoning_summary_part.done event + add use_experimental_reasoning_summary config
 74dad12 fix: remove response.reasoning_summary_part.done event that may corrupt Codex parser state
 1040dc5 debug: SSE event order traces - direct fs writes + traceLog
