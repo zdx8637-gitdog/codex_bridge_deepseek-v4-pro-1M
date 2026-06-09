@@ -3417,6 +3417,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
 
   const finishReasoning = async () => {
     const _dbg_fr_start = Date.now(); traceLog("DEBUG_SSE_finishReasoning_START", { traceId: trace.traceId, responseId, textLen: reasoningState.text.length, added: reasoningState.added, done: reasoningState.done, outputIndex: reasoningState.outputIndex });
+    fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"FINISH_REASONING_START",time:new Date().toISOString(),textLen:reasoningState.text.length,added:reasoningState.added,done:reasoningState.done})+ "\n");
     if (!reasoningState.added || reasoningState.done) return;
     const displaySummary = await createReasoningDisplaySummary({ rawReasoningContent: reasoningState.text, toolCalls: Array.from(toolCalls.values()), requestBody, trace, client });
     const item = responseReasoningItem({ rawReasoningContent: reasoningState.text, displaySummary, status: "completed", id: reasoningState.id });
@@ -3434,6 +3435,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
   };
   const finishTools = () => {
     traceLog("DEBUG_SSE_finishTools_START", { traceId: trace.traceId, responseId, toolCount: toolCalls.size, completed });
+    fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"FINISH_TOOLS_START",time:new Date().toISOString(),toolCount:toolCalls.size,completed:completed})+ "\n");
     for (const [, call] of toolCalls) {
       if (call.done) continue;
       maybeEmitToolAdded(call);
@@ -3654,6 +3656,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
         const data = line.slice(5).trim();
         if (!data) continue;
           traceLog("DEBUG_SSE_DONE_detected", { traceId: trace.traceId, responseId, completed });
+          fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"DONE_DETECTED",time:new Date().toISOString(),completed:completed})+ "\n");
         if (data === "[DONE]") {
           sawDone = true;
           finishResponse();
@@ -3740,6 +3743,7 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
 
           if (choice.finish_reason) {
             traceLog("DEBUG_SSE_finish_reason_detected", { traceId: trace.traceId, responseId, finishReason: choice.finish_reason, completed });
+            fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"FINISH_REASON_DETECTED",time:new Date().toISOString(),reason:choice.finish_reason,completed:completed})+ "\n");
             finishReason = choice.finish_reason;
             sawFinishReason = true;
             flushPendingContent();
