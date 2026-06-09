@@ -4,6 +4,18 @@ Codex DeepSeek Bridge is a Windows launcher and local protocol bridge that lets 
 
 It keeps Codex pointed at a local OpenAI-compatible `/v1/responses` endpoint, then translates Codex Responses API traffic into upstream `/v1/chat/completions` requests. The upstream response is translated back into the Responses shape Codex expects, including reasoning items, messages, tool calls, and compacted history.
 
+## Latest Update
+
+The bridge now restores Codex-visible reasoning summaries without polluting DeepSeek's main reasoning context.
+
+- `deepseek-v4-pro` remains the main Codex model.
+- `deepseek-v4-flash` is used only to create short UI summaries.
+- UI summaries are formatted as `**title**` plus body text so Codex TUI can render them before tool calls.
+- Raw DeepSeek `reasoning_content` is preserved for replay, but new Codex-facing tool-call items do not carry `reasoning_content`.
+- On continuation turns, raw thinking is restored to DeepSeek exactly once on the assistant tool-call message.
+- v4flash summaries are not injected into the main `deepseek-v4-pro` conversation and are never replayed as `reasoning_content`.
+- Mock summary mode exists only for local diagnostics through `PASEO_REASONING_SUMMARY_MODE=mock`; the normal launcher path uses v4flash summaries.
+
 ## What We Built
 
 - A one-click Windows launcher for starting Codex with an isolated `CODEX_HOME`.
