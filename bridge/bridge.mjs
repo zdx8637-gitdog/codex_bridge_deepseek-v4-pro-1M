@@ -30,9 +30,15 @@ const REASONING_SUMMARY_JSON = path.join(LOG_DIR, "reasoning-summary.json");
 const REASONING_DISPLAY = process.env.CODEX_DEEPSEEK_REASONING_DISPLAY || "summarize";
 const REASONING_SUMMARY_MODEL = process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MODEL || "deepseek-v4-flash";
 const REASONING_SUMMARY_TIMEOUT_MS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_TIMEOUT_MS || 8000);
-const REASONING_SUMMARY_MAX_TOKENS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_TOKENS || 120);
+const REASONING_SUMMARY_MAX_TOKENS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_TOKENS || 900);
 const REASONING_SUMMARY_MAX_RAW_CHARS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_RAW_CHARS || 6000);
 const REASONING_SUMMARY_MAX_TOOL_ARG_CHARS = Number(process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MAX_TOOL_ARG_CHARS || 300);
+const REASONING_SUMMARY_THINKING = (process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_THINKING || "enabled").trim().toLowerCase();
+const REASONING_SUMMARY_REASONING_EFFORT = (process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_REASONING_EFFORT || "medium").trim();
+const TOOL_SUMMARY_SURFACE = (
+  process.env.CODEX_DEEPSEEK_TOOL_SUMMARY_SURFACE ||
+  "commentary"
+).trim().toLowerCase();
 const COMPACT_AUDIT_LOG = path.join(LOG_DIR, "compact-audit.jsonl");
 const COMPACT_AUDIT_TEXT_LOG = path.join(LOG_DIR, "compact-audit.log");
 const COMPACT_SUMMARY_JSON = path.join(LOG_DIR, "compact-summary.json");
@@ -41,12 +47,11 @@ const COMPACTION_STORE_FILE = path.join(STATE_DIR, "compaction-store.jsonl");
 const TRACE_LOG = path.join(TRACE_DIR, "bridge-trace.jsonl");
 const TRACE_ENABLED = !/^(0|false|off)$/i.test(process.env.BRIDGE_TRACE_ENABLED || "1");
 const REASONING_SUMMARY_MODE = (
-  process.env.PASEO_REASONING_SUMMARY_MODE ||
   process.env.CODEX_DEEPSEEK_REASONING_SUMMARY_MODE ||
   ""
 ).trim().toLowerCase();
-const MOCK_REASONING_SUMMARY = process.env.PASEO_MOCK_REASONING_SUMMARY ||
-  `PASEO_MOCK_SUMMARY_VISIBLE_BEFORE_TOOL_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}_${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+const MOCK_REASONING_SUMMARY = process.env.CODEX_DEEPSEEK_MOCK_REASONING_SUMMARY ||
+  `CODEX_DEEPSEEK_MOCK_SUMMARY_VISIBLE_BEFORE_TOOL_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}_${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 const BRIDGE_MAX_REQUEST_BYTES = Number(process.env.BRIDGE_MAX_REQUEST_BYTES || 0);
 const UPSTREAM_RETRY_COUNT = Number(process.env.UPSTREAM_RETRY_COUNT || 0);
 const UPSTREAM_RETRY_DELAY_MS = Number(process.env.UPSTREAM_RETRY_DELAY_MS || 250);
@@ -276,6 +281,13 @@ function incrementCounter(target, key) {
 function responseMessageTextLength(item) {
   if (item?.type !== "message" || !Array.isArray(item.content)) return 0;
   return item.content.reduce((total, part) => total + String(part?.text || "").length, 0);
+}
+
+function isBridgeUiOnlyMessage(item) {
+  return Boolean(
+    item?.metadata?.bridge_ui_only ||
+    item?.metadata?.bridge_tool_summary_commentary
+  );
 }
 
 function responseOutputDiagnostics(output = [], finishReason = null) {
@@ -1204,6 +1216,7 @@ function outputTextFromResponseMessage(item) {
 }
 
 function isBridgeDiagnosticMessage(item) {
+  if (isBridgeUiOnlyMessage(item)) return true;
   if (item?.metadata?.bridge_diagnostic) return true;
   if ((item?.type || (item?.role ? "message" : "")) !== "message") return false;
   return outputTextFromResponseMessage(item).startsWith(BRIDGE_DIAGNOSTIC_PREFIX);
@@ -1769,7 +1782,7 @@ function responseReasoningItem(value, status = "completed", id = uid("rs")) {
   if (reasoningText) item.content = [{ type: "reasoning_text", text: reasoningText }];
   return item;
 }
-function responseMessageItem(text, status = "completed", id = uid("msg"), metadata = {}) {
+function responseMessageItem(text, status = "completed", id = uid("msg"), metadata = {}, phase = null) {
   const item = {
     type: "message",
     id,
@@ -1778,6 +1791,7 @@ function responseMessageItem(text, status = "completed", id = uid("msg"), metada
     content: [{ type: "output_text", text: String(text || ""), annotations: [] }],
   };
   if (metadata && Object.keys(metadata).length > 0) item.metadata = metadata;
+  if (phase) item.phase = phase;
   return item;
 }
 
@@ -3420,6 +3434,61 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     reasoningContent += delta;
   };
 
+  const emitToolSummaryCommentary = (displaySummary, currentToolCalls) => {
+    const text = String(displaySummary || "").trim();
+    if (!text) return null;
+    const itemId = uid("msg");
+    const outputIndexForCommentary = outputIndex++;
+    const item = responseToolSummaryCommentaryItem(text, "completed", itemId);
+    const inProgressItem = { ...responseToolSummaryCommentaryItem("", "in_progress", itemId), content: [] };
+    const part = { type: "output_text", text, annotations: [] };
+    clientRes.write(sse("response.output_item.added", {
+      type: "response.output_item.added",
+      output_index: outputIndexForCommentary,
+      item: inProgressItem,
+    }));
+    clientRes.write(sse("response.content_part.added", {
+      type: "response.content_part.added",
+      output_index: outputIndexForCommentary,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    }));
+    clientRes.write(sse("response.output_text.delta", {
+      type: "response.output_text.delta",
+      output_index: outputIndexForCommentary,
+      content_index: 0,
+      delta: text,
+    }));
+    clientRes.write(sse("response.output_text.done", {
+      type: "response.output_text.done",
+      output_index: outputIndexForCommentary,
+      content_index: 0,
+      text,
+    }));
+    clientRes.write(sse("response.content_part.done", {
+      type: "response.content_part.done",
+      output_index: outputIndexForCommentary,
+      content_index: 0,
+      part,
+    }));
+    clientRes.write(sse("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: outputIndexForCommentary,
+      item,
+    }));
+    output.push({ sortIndex: outputIndexForCommentary, item });
+    traceLog("tool_summary_commentary_emitted", {
+      traceId: trace?.traceId || null,
+      clientId: client?.id || null,
+      responseId,
+      outputIndex: outputIndexForCommentary,
+      summaryChars: text.length,
+      toolCalls: (currentToolCalls || []).length,
+      surface: TOOL_SUMMARY_SURFACE,
+    });
+    return item;
+  };
+
   const finishReasoning = async () => {
     const _dbg_fr_start = Date.now(); traceLog("DEBUG_SSE_finishReasoning_START", { traceId: trace.traceId, responseId, textLen: reasoningState.text.length, added: reasoningState.added, done: reasoningState.done, outputIndex: reasoningState.outputIndex });
     fs.appendFileSync(LOG_DIR + "/debug_sse.log", JSON.stringify({event:"FINISH_REASONING_START",time:new Date().toISOString(),textLen:reasoningState.text.length,added:reasoningState.added,done:reasoningState.done})+ "\n");
@@ -3429,16 +3498,21 @@ async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, tr
     }
     if (!reasoningState.added || reasoningState.done) return;
     const displaySummary = await createReasoningDisplaySummary({ rawReasoningContent: reasoningState.text, toolCalls: currentToolCalls, requestBody, trace, client });
-    const item = responseReasoningItem({ rawReasoningContent: reasoningState.text, displaySummary, status: "completed", id: reasoningState.id });
-    if (displaySummary) {
-    traceLog("DEBUG_SSE_emit_summary_delta", { traceId: trace.traceId, responseId, deltaLen: displaySummary.length });
-      clientRes.write(sse("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, delta: displaySummary }));
+    const emitAsCommentary = shouldEmitToolSummaryCommentary(currentToolCalls, displaySummary);
+    const reasoningDisplaySummary = emitAsCommentary ? "" : displaySummary;
+    const item = responseReasoningItem({ rawReasoningContent: reasoningState.text, displaySummary: reasoningDisplaySummary, status: "completed", id: reasoningState.id });
+    if (reasoningDisplaySummary) {
+    traceLog("DEBUG_SSE_emit_summary_delta", { traceId: trace.traceId, responseId, deltaLen: reasoningDisplaySummary.length });
+      clientRes.write(sse("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, delta: reasoningDisplaySummary }));
     }
     traceLog("DEBUG_SSE_emit_summary_done", { traceId: trace.traceId, responseId });
-    clientRes.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, text: displaySummary }));
+    clientRes.write(sse("response.reasoning_summary_text.done", { type: "response.reasoning_summary_text.done", item_id: reasoningState.id, output_index: reasoningState.outputIndex, summary_index: 0, text: reasoningDisplaySummary }));
     clientRes.write(sse("response.output_item.done", { type: "response.output_item.done", output_index: reasoningState.outputIndex, item }));
     output.push({ sortIndex: reasoningState.outputIndex, item });
-    traceLog("DEBUG_SSE_finishReasoning_END", { traceId: trace.traceId, responseId, elapsedMs: Date.now() - _dbg_fr_start, hasSummary: !!displaySummary, summaryLen: (displaySummary||"").length });
+    if (emitAsCommentary) {
+      emitToolSummaryCommentary(displaySummary, currentToolCalls);
+    }
+    traceLog("DEBUG_SSE_finishReasoning_END", { traceId: trace.traceId, responseId, elapsedMs: Date.now() - _dbg_fr_start, hasSummary: !!displaySummary, reasoningSummaryLen: (reasoningDisplaySummary||"").length, commentarySummaryLen: emitAsCommentary ? (displaySummary || "").length : 0, summarySurface: emitAsCommentary ? "commentary" : "reasoning" });
     reasoningState.done = true;
   };
   const finishTools = () => {
@@ -3824,11 +3898,25 @@ async function chatCompletionToResponse(
       trace,
       client,
     });
+    const emitAsCommentary = shouldEmitToolSummaryCommentary(messageToolCalls, displaySummary);
     output.push(responseReasoningItem({
       rawReasoningContent: message.reasoning_content || "",
-      displaySummary,
+      displaySummary: emitAsCommentary ? "" : displaySummary,
       status: "completed",
     }));
+    if (emitAsCommentary) {
+      output.push(responseToolSummaryCommentaryItem(displaySummary, "completed"));
+      traceLog("tool_summary_commentary_emitted", {
+        traceId: trace?.traceId || null,
+        clientId: client?.id || null,
+        responseId,
+        outputIndex: output.length - 1,
+        summaryChars: String(displaySummary || "").length,
+        toolCalls: messageToolCalls.length,
+        surface: TOOL_SUMMARY_SURFACE,
+        streaming: false,
+      });
+    }
   }
 
   if (messageToolCalls.length > 0) {
@@ -4281,6 +4369,13 @@ function shouldEmitMockSummaryForTools(toolCalls) {
   );
 }
 
+function hasReasoningSummaryToolCalls(toolCalls) {
+  return (
+    Array.isArray(toolCalls) &&
+    toolCalls.some((toolCall) => Boolean(toolCall && (toolCall.id || toolCall.callId || toolCallDisplayName(toolCall))))
+  );
+}
+
 function codexReasoningSummaryHasVisibleBody(text) {
   const s = String(text || "").trim();
   const open = s.indexOf("**");
@@ -4292,10 +4387,10 @@ function codexReasoningSummaryHasVisibleBody(text) {
   return s.slice(afterCloseIndex).trim().length > 0;
 }
 
-function codexReasoningSummaryTitle(toolCalls, fallback = "Reasoning summary") {
+function codexReasoningSummaryTitle(toolCalls, fallback = "整理执行思路") {
   const names = Array.from(new Set((toolCalls || []).map(toolCallDisplayName).filter(Boolean)));
-  if (names.length === 1) return `Preparing ${names[0]}`;
-  if (names.length > 1) return "Planning tool calls";
+  if (names.length === 1) return `准备调用 ${names[0]}`;
+  if (names.length > 1) return "规划工具调用";
   return fallback;
 }
 
@@ -4306,11 +4401,60 @@ function formatCodexVisibleReasoningSummary(summary, { toolCalls = [], title = "
   return `**${title || codexReasoningSummaryTitle(toolCalls)}**\n\n${body}`;
 }
 
+function toolSummarySurfaceIsCommentary() {
+  return TOOL_SUMMARY_SURFACE === "commentary" || TOOL_SUMMARY_SURFACE === "agent_message";
+}
+
+function shouldEmitToolSummaryCommentary(toolCalls, displaySummary) {
+  return (
+    toolSummarySurfaceIsCommentary() &&
+    hasReasoningSummaryToolCalls(toolCalls) &&
+    Boolean(String(displaySummary || "").trim())
+  );
+}
+
+function responseToolSummaryCommentaryItem(text, status = "completed", id = uid("msg")) {
+  return responseMessageItem(
+    text,
+    status,
+    id,
+    {
+      bridge_ui_only: true,
+      bridge_tool_summary_commentary: true,
+    },
+    "commentary",
+  );
+}
+
+function summaryThinkingEnabled() {
+  return !/^(0|false|off|disabled|none)$/i.test(REASONING_SUMMARY_THINKING);
+}
+
+function normalizeSummaryText(text) {
+  return String(text || "")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/\u2026/g, "...");
+}
+
+function summaryChatRequestOptions() {
+  if (!summaryThinkingEnabled()) {
+    return { thinking: { type: "disabled" } };
+  }
+  const options = { thinking: { type: "enabled" } };
+  if (REASONING_SUMMARY_REASONING_EFFORT) {
+    options.reasoning_effort = REASONING_SUMMARY_REASONING_EFFORT;
+  }
+  return options;
+}
+
 async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, requestBody, trace, client }) {
+  const hasToolCalls = hasReasoningSummaryToolCalls(toolCalls);
   if (shouldEmitMockSummaryForTools(toolCalls)) {
     const displaySummary = formatCodexVisibleReasoningSummary(MOCK_REASONING_SUMMARY, {
       toolCalls,
-      title: "PASEO mock summary",
+      title: "Codex DeepSeek mock summary",
     });
     traceLog("reasoning_display_summary_mock", {
       traceId: trace?.traceId || null,
@@ -4324,15 +4468,23 @@ async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, r
   if (REASONING_DISPLAY === "status") {
     const tc = (toolCalls || []).map(t=>toolCallDisplayName(t)||"unknown").join(", ");
     return formatCodexVisibleReasoningSummary(
-      tc ? `Using: ${tc}` : `Thinking (${(rawReasoningContent||"").length} chars)`,
-      { toolCalls, title: codexReasoningSummaryTitle(toolCalls, "Thinking") },
+      tc ? `准备使用工具：${tc}` : `整理执行思路（${(rawReasoningContent||"").length} 字符）`,
+      { toolCalls, title: codexReasoningSummaryTitle(toolCalls, "整理执行思路") },
     );
   }
   if (REASONING_DISPLAY === "raw") {
     return formatCodexVisibleReasoningSummary(
       truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS),
-      { toolCalls, title: codexReasoningSummaryTitle(toolCalls, "Raw reasoning") },
+      { toolCalls, title: codexReasoningSummaryTitle(toolCalls, "原始推理") },
     );
+  }
+  if (!hasToolCalls) {
+    traceLog("reasoning_display_summary_skipped_no_tool_call", {
+      traceId: trace?.traceId || null,
+      clientId: client?.id || null,
+      rawChars: (rawReasoningContent || "").length,
+    });
+    return "";
   }
   if (!rawReasoningContent || !rawReasoningContent.trim()) return "";
   const tcs = (toolCalls || []).map(t=>({
@@ -4341,20 +4493,38 @@ async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, r
   }));
   const lastUser = (()=>{ const inp=requestBody?.input; if(typeof inp==="string") return inp; if(Array.isArray(inp)){ const l=inp[inp.length-1]; if(l?.content?.[0]?.text) return l.content[0].text; if(typeof l?.content==="string") return l.content; } return ""; })();
   const summaryInput = JSON.stringify({ raw_reasoning_content: truncateText(rawReasoningContent, REASONING_SUMMARY_MAX_RAW_CHARS), tool_calls: tcs, latest_user_request: truncateText(lastUser, 500) });
+  const summaryPrompt =
+    "请根据输入包生成 Codex CLI 工具调用前显示的进展摘要。\n" +
+    "必须只输出简体中文，并严格使用下面的 Markdown 形态：\n" +
+    "**动作标题**\n\n" +
+    "- 当前事项：说明即将处理的具体任务和原因。\n" +
+    "- 依据线索：说明已知约束、用户要求、文件线索或工具参数的高层摘要。\n" +
+    "- 下一步：说明即将调用工具要验证、读取、修改或执行什么。\n\n" +
+    "要求：\n" +
+    "- 只使用简体中文；工具名、文件名、配置项、代码标识可以保留原文。\n" +
+    "- 采用事项导向表达，不使用第一人称，也不要写“助手”“模型”“the assistant”“I”“we”。\n" +
+    "- 必须输出完整标题和完整三条 bullet；每条 bullet 都要是完整句子，不能输出空 bullet 或半截 bullet。\n" +
+    "- 保留足够逻辑，让用户知道为什么要调用工具、准备用工具确认什么，不要只复述工具名。\n" +
+    "- 不要复制完整命令、完整文件内容、密钥、长参数或隐藏推理原文。\n" +
+    "- 除非输入明确说明结果已经发生，否则不要声称工具已成功、补丁已应用或测试已通过。\n" +
+    "- 将推理综合成用户可见的操作摘要；不要逐字暴露 hidden chain-of-thought。\n" +
+    "- 不要调用工具，不要在 Markdown 摘要之外添加任何文字。\n\n" +
+    `Input package: ${summaryInput}`;
   const chatReq = {
     model: REASONING_SUMMARY_MODEL,
     messages: [
-      { role: "system", content: "You produce concise UI summaries for a coding agent. Do not expose hidden chain-of-thought. Return only the requested markdown block." },
-      { role: "user", content: `Summarize the assistant reasoning for Codex UI display. Return exactly this format: first line a short markdown bold title like **Checking files**, then one blank line, then one concise sentence. Use the same language as the latest user request when clear. Do not reveal chain-of-thought details. Do not include raw hidden reasoning. Do not include secrets, full file contents, or exact long tool arguments. Do not call tools. Input package: ${summaryInput}` },
+      { role: "system", content: "你只编写 Codex CLI 用户可见的简体中文工具调用前摘要。摘要必须事项导向、逻辑清楚，并且不能逐字泄露隐藏推理。" },
+      { role: "user", content: summaryPrompt },
     ],
-    stream: false, thinking: { type: "disabled" }, max_tokens: REASONING_SUMMARY_MAX_TOKENS, temperature: 0,
+    stream: false, max_tokens: REASONING_SUMMARY_MAX_TOKENS, temperature: 0,
+    ...summaryChatRequestOptions(),
   };
   try {
     const upstream = upstreamForMode();
     const result = await fetchSummaryChatCompletion(upstream, chatReq, REASONING_SUMMARY_TIMEOUT_MS);
     if (result.ok && result.json) {
       const content = result.json.choices?.[0]?.message?.content || "";
-      const summary = formatCodexVisibleReasoningSummary(content, {
+      const summary = formatCodexVisibleReasoningSummary(normalizeSummaryText(content), {
         toolCalls,
         title: codexReasoningSummaryTitle(toolCalls),
       });
@@ -4365,7 +4535,7 @@ async function createReasoningDisplaySummary({ rawReasoningContent, toolCalls, r
     }
   } catch(e) { bridgeLog("reasoning summary failed", { error: e.message }); }
   const tc2 = (toolCalls||[]).map(t=>toolCallDisplayName(t)||"unknown").join(", ");
-  const fallbackSummary = tc2 ? `Planning: ${tc2}` : ((rawReasoningContent||"").length > 0 ? `Thinking (${(rawReasoningContent||"").length} chars)` : "");
+  const fallbackSummary = tc2 ? `规划工具调用：${tc2}` : ((rawReasoningContent||"").length > 0 ? `整理执行思路（${(rawReasoningContent||"").length} 字符）` : "");
   return formatCodexVisibleReasoningSummary(fallbackSummary, {
     toolCalls,
     title: codexReasoningSummaryTitle(toolCalls),
@@ -4384,6 +4554,11 @@ function createBridgeServer() {
           upstream_base_url: DEEPSEEK_BASE_URL,
           reasoning_summary_mode: REASONING_SUMMARY_MODE || "v4flash",
           mock_reasoning_summary: isMockReasoningSummaryMode() ? MOCK_REASONING_SUMMARY : null,
+          reasoning_summary_model: REASONING_SUMMARY_MODEL,
+          reasoning_summary_thinking: summaryThinkingEnabled() ? "enabled" : "disabled",
+          reasoning_summary_reasoning_effort: summaryThinkingEnabled() ? REASONING_SUMMARY_REASONING_EFFORT : null,
+          reasoning_summary_max_tokens: REASONING_SUMMARY_MAX_TOKENS,
+          tool_summary_surface: TOOL_SUMMARY_SURFACE || "reasoning",
           registry_enabled: Boolean(PROXY_KEYS_FILE),
           uptime_sec: Math.floor((Date.now() - START_TIME) / 1000),
           trace_enabled: TRACE_ENABLED,
