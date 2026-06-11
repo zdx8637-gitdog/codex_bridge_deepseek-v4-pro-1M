@@ -108,6 +108,83 @@ Bridge=http://127.0.0.1:43119/v1
 | Launch another Codex terminal | Reuses the compatible shared bridge |
 | Close launcher GUI | Stops the bridge only if this launcher started it |
 
+## Desktop Bridge Mode
+
+Codex Desktop can also be launched through the local bridge, but current Codex
+Desktop builds do not receive `codex app -c ...` process-local config overrides.
+The desktop launcher therefore uses a reversible global `config.toml` overlay for
+Desktop only. It still does not edit `auth.json`, and it never writes the
+DeepSeek API key to Codex config.
+
+Use:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\launch-desktop-bridge.ps1
+```
+
+Or double-click:
+
+```text
+launch-desktop-bridge.bat
+```
+
+The BAT file opens a small Windows UI for DeepSeek Base URL, DeepSeek API key,
+and bridge port. Codex Desktop chooses projects inside the app, so the Desktop
+BAT does not ask for a working directory. The UI saves only non-sensitive
+preferences such as Base URL and Port. The DeepSeek API key is passed only to the
+bridge launcher for the current launch and is not saved by the UI.
+
+If you explicitly want to open a specific workspace from the command line, pass
+`-WorkDir` to the PowerShell script:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\launch-desktop-bridge.ps1 -WorkDir "C:\path\to\workspace"
+```
+
+This script:
+
+- Starts or reuses the local bridge on `127.0.0.1`.
+- Creates a Desktop bridge runtime under `%LOCALAPPDATA%\codex-deepseek-bridge-launcher\desktop-runtime` by default.
+- Registers that client in the local bridge registry.
+- Applies a precise, restorable overlay to `C:\Users\<you>\.codex\config.toml`.
+- Configures Codex Desktop to use `deepseek-v4-pro` through the local bridge.
+- Stores only the local bridge proxy key in `experimental_bearer_token`.
+- Backs up the original config under `%LOCALAPPDATA%\codex-deepseek-bridge-launcher\`.
+- Does not edit `C:\Users\<you>\.codex\auth.json`.
+- Does not edit existing `[projects.*]` workspace/session configuration blocks.
+
+For safety, the script refuses to launch by default if Codex Desktop or its app
+runtime already appears to be running. Close Codex Desktop first, then run the
+script again. Use `-DryRun` to preview the bridge, registry, and config-overlay
+steps without launching Desktop or changing the global config.
+
+Restore your original Desktop config with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\launch-desktop-bridge.ps1 -RestoreConfig
+```
+
+Or run:
+
+```text
+restore-desktop-bridge.bat
+```
+
+The restore BAT has two layers:
+
+- Layer 1 calls `-RestoreConfig`, which restores only if the current config still
+  matches the hash recorded when the overlay was applied.
+- It then checks that the overlay state is gone and bridge markers are absent.
+- If that check fails, Layer 2 calls `-ForceRestoreConfig`, makes a safety backup
+  of the current config, and copies the stored Desktop-bridge backup back into
+  place.
+
+While the overlay is active, normal Codex Desktop launches will also use the
+bridge provider because Desktop reads the global Codex config. Run `-RestoreConfig`
+before returning Desktop to the original OpenAI configuration. CLI launcher
+sessions remain isolated through their workspace `CODEX_HOME` and are not affected
+by this Desktop overlay.
+
 ## Reasoning Summary Behavior
 
 DeepSeek returns raw `reasoning_content`, not an OpenAI Responses `reasoning.summary`.
@@ -215,6 +292,10 @@ bridge\bridge.mjs        Local Responses-to-Chat bridge
 launcher.ps1             Windows GUI launcher
 launcher.bat             Double-click entrypoint
 launch-codex.ps1         Starts Codex with isolated environment
+launch-desktop-bridge.ps1 Starts Codex Desktop with reversible config overlay
+launch-desktop-bridge.bat Human-friendly Desktop bridge UI entrypoint
+launch-desktop-bridge-ui.ps1 Windows Forms UI for Desktop bridge launch
+restore-desktop-bridge.bat Restores Desktop config with checked and forced layers
 setup-sandbox.ps1        Creates isolated Codex config and client identity
 start-bridge.ps1         Starts the bridge directly
 stop-bridge.ps1          Stops a bridge started by the launcher

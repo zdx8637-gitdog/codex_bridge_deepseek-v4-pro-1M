@@ -5,6 +5,14 @@
 ### Diagnostics
 
 - Added completion diagnostics for `finishReason`, terminal output kind, message-only endings, and message length in traces, bridge logs, and `/health`.
+- Added `launch-desktop-bridge.ps1` for Codex Desktop bridge mode.
+- Switched Desktop bridge mode to a reversible global `config.toml` overlay after source and log checks showed `codex app -c ...` does not pass provider overrides into Desktop.
+- Added `-RestoreConfig` for hash-checked restoration of the original Codex Desktop config.
+- Desktop bridge mode now uses `experimental_bearer_token` for the local bridge proxy key, avoiding dependence on Desktop inheriting shell environment variables.
+- Limited the Desktop config overlay to model/provider keys and the bridge provider table; existing `[projects.*]` blocks are left untouched.
+- Added `launch-desktop-bridge.bat` plus a small Windows Forms UI for entering Base URL, API key, and port without saving the API key. Desktop mode no longer asks for WorkDir by default because Codex Desktop chooses projects inside the app.
+- Added `restore-desktop-bridge.bat` with checked restore first and forced backup replacement as a second layer.
+- Added `-ForceRestoreConfig` to recover from failed Desktop overlay checks by preserving the current config and copying back the stored bridge backup.
 
 ### Reasoning Policy
 
