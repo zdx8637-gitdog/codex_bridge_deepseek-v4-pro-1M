@@ -17,6 +17,7 @@ const PROXY_KEY = cliArgs["proxy-key"] || process.env.PHASE1_PROXY_KEY || "phase
 const PROXY_KEYS_FILE = cliArgs["proxy-keys-file"] || process.env.CODEX_BRIDGE_PROXY_KEYS_FILE || "";
 const EXTRA_PROXY_KEYS = cliArgs["proxy-keys"] || process.env.CODEX_BRIDGE_PROXY_KEYS || "";
 const UPSTREAM_MODE = (process.env.UPSTREAM_MODE || "deepseek").toLowerCase();
+
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1";
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
 const LOG_DIR = path.resolve(cliArgs["log-dir"] || process.env.PHASE_LOG_DIR || "sandbox/phase1/logs");
@@ -1655,6 +1656,32 @@ function collectToolSearchOutputTools(value, out = []) {
   return out;
 }
 
+
+
+// apply_patch proxy schemas (CCX-style structured proxy)
+const APPLY_PATCH_ADD_FILE_SCHEMA = { type: "object", additionalProperties: false, properties: { path: { type: "string", description: "Target file path." }, content: { type: "string", description: "Full file content without patch '+' prefixes." } }, required: ["path", "content"] };
+const APPLY_PATCH_DELETE_FILE_SCHEMA = { type: "object", additionalProperties: false, properties: { path: { type: "string", description: "Target file path." } }, required: ["path"] };
+const APPLY_PATCH_UPDATE_FILE_SCHEMA = { type: "object", additionalProperties: false, properties: { path: { type: "string", description: "Target file path." }, move_to: { type: "string", description: "Optional destination path for move operations." }, hunks: { type: "array", description: "Structured edit hunks.", items: { type: "object", properties: { context: { type: "string", description: "Optional hunk context header." }, lines: { type: "array", items: { type: "object", properties: { op: { type: "string", enum: [" ", "+", "-"], description: "Line operation: space=context, +=add, -=remove." }, text: { type: "string", description: "Line content without operation prefix." } }, required: ["op", "text"] } } }, required: ["lines"] } } }, required: ["path", "hunks"] };
+const APPLY_PATCH_REPLACE_FILE_SCHEMA = { type: "object", additionalProperties: false, properties: { path: { type: "string", description: "Target file path." }, content: { type: "string", description: "Full replacement content." } }, required: ["path", "content"] };
+const APPLY_PATCH_BATCH_SCHEMA = { type: "object", additionalProperties: false, properties: { operations: { type: "array", description: "Ordered list of patch operations to apply atomically.", items: { type: "object", properties: { type: { type: "string", enum: ["add_file", "delete_file", "update_file", "replace_file"] }, path: { type: "string" }, content: { type: "string" }, move_to: { type: "string" }, hunks: { type: "array" } }, required: ["type", "path"] } } }, required: ["operations"] };
+
+const APPLY_PATCH_PROXY_DEFS = [
+  { suffix: "_add_file", action: "add_file", desc: "Create one new file by providing a target path and full file content.", schema: APPLY_PATCH_ADD_FILE_SCHEMA },
+  { suffix: "_delete_file", action: "delete_file", desc: "Delete one file by providing a target path.", schema: APPLY_PATCH_DELETE_FILE_SCHEMA },
+  { suffix: "_update_file", action: "update_file", desc: "Edit one existing file with structured hunks.", schema: APPLY_PATCH_UPDATE_FILE_SCHEMA },
+  { suffix: "_replace_file", action: "replace_file", desc: "Replace one existing file by providing a target path and full new file content.", schema: APPLY_PATCH_REPLACE_FILE_SCHEMA },
+  { suffix: "_batch", action: "batch", desc: "Edit files by providing structured JSON patch operations.", schema: APPLY_PATCH_BATCH_SCHEMA },
+];
+
+function buildProxyFunctionTool(chatName, baseDescription, def) {
+  return { type: "function", function: { name: chatName, description: baseDescription ? baseDescription + " (proxy action: " + def.action + ")" : def.desc, parameters: def.schema } };
+}
+
+function proxyActionFromUpstreamName(name) {
+  for (const def of APPLY_PATCH_PROXY_DEFS) { if (name.endsWith(def.suffix)) return def.action; }
+  return null;
+}
+
 function convertTools(tools = []) {
   const chatTools = [];
   const context = createToolContext();
@@ -1702,7 +1729,24 @@ function convertTools(tools = []) {
     if (tool.type === "custom") {
       const name = tool.name || "custom_tool";
       if (context.customMap.has(name)) continue;
-      const chatName = uniqueChatToolName(name, context.usedNames);
+
+      if (name === "apply_patch") {
+        if (!context._applyPatchSeen) context._applyPatchSeen = new Set();
+        if (context._applyPatchSeen.has(name)) continue;
+        context._applyPatchSeen.add(name);
+        for (var _api = 0; _api < APPLY_PATCH_PROXY_DEFS.length; _api++) {
+          var def = APPLY_PATCH_PROXY_DEFS[_api];
+          var chatName = uniqueChatToolName(name + def.suffix, context.usedNames);
+          addChatTool(
+            buildProxyFunctionTool(chatName, tool.description, def),
+            chatName,
+            { kind: "custom", name, original: tool, proxyAction: def.action }
+          );
+        }
+        continue;
+      }
+
+      var chatName = uniqueChatToolName(name, context.usedNames);
       addChatTool({
         type: "function",
         function: {
@@ -2456,7 +2500,7 @@ function responsesToChatRequest(body, client) {
   flushToolCalls();
 
   const chatReq = {
-    model: body.model || "deepseek-v4-pro",
+    model: "deepseek-v4-pro",
     messages: normalizeMessages(messages),
     stream: Boolean(body.stream),
   };
@@ -2536,12 +2580,23 @@ function responseToolItemFromChatCall(call, trace, status = "completed", argumen
   }
 
   if (ctx?.kind === "custom") {
+    const reconstructedApplyPatchInput =
+      ctx.name === "apply_patch" && ctx.proxyAction
+        ? reconstructApplyPatchInput(ctx, argumentsText)
+        : null;
+    if (ctx.name === "apply_patch" && ctx.proxyAction && !reconstructedApplyPatchInput && String(argumentsText || "").trim()) {
+      traceLog("apply_patch_proxy_reconstruction_failed", {
+        chatName: call.name,
+        proxyAction: ctx.proxyAction,
+        argumentLength: String(argumentsText || "").length,
+      });
+    }
     return attachReasoning({
       type: "custom_tool_call",
       id: call.itemId || uid("ctc"),
       call_id: call.callId,
       name: ctx.original?.name || call.name,
-      input: customInputFromChatArguments(argumentsText),
+      input: reconstructedApplyPatchInput ?? customInputFromChatArguments(argumentsText),
       status,
     });
   }
@@ -2969,7 +3024,7 @@ async function createDeepSeekCompactionSummary(items, body, trace, client, reaso
 
   const upstream = upstreamForMode();
   const chatReq = {
-    model: body.model || "deepseek-v4-pro",
+    model: "deepseek-v4-pro",
     messages: [
       {
         role: "system",
@@ -3048,7 +3103,7 @@ async function createCompactionRecord(client, body, trace, sourceItems, reason, 
     previousResponseId: extra.previousResponseId || body.previous_response_id || null,
     itemCount: Array.isArray(sourceItems) ? sourceItems.length : 0,
     summary,
-    summaryModel: summaryResult.model || body.model || "deepseek-v4-pro",
+    summaryModel: "deepseek-v4-pro",
     summaryTokens: translateUsage(summaryResult.usage || null),
     beforeEstimate: extra.beforeEstimate || null,
     afterEstimate: extra.afterEstimate || null,
@@ -3309,6 +3364,12 @@ function emitResponseOutputItemSse(res, outputIndex, item) {
   }));
 }
 
+
+
+
+
+
+
 function writeCompletedResponseAsSse(res, response) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -3323,7 +3384,7 @@ function writeCompletedResponseAsSse(res, response) {
 
 async function pipeChatStreamToResponses(upstreamRes, clientRes, requestBody, trace, client, reasoningAudit, options = {}) {
   const responseId = options.responseId || uid("resp");
-  const model = requestBody.model || "deepseek-v4-pro";
+  const model = "deepseek-v4-pro" || "deepseek-v4-pro";
   const previousResponseId = options.visiblePreviousResponseId !== undefined
     ? options.visiblePreviousResponseId
     : requestBody.previous_response_id || null;
@@ -3942,7 +4003,7 @@ async function chatCompletionToResponse(
 
   const response = baseResponse(
     responseId,
-    requestBody.model || upstreamJson.model || "deepseek-v4-pro",
+    upstreamJson.model || requestBody.model || "deepseek-v4-pro",
     storeOptions.visiblePreviousResponseId !== undefined
       ? storeOptions.visiblePreviousResponseId
       : requestBody.previous_response_id || null,
@@ -4164,7 +4225,8 @@ async function handleResponses(req, res) {
     clientId: client.id,
     ...responseOutputDiagnostics(response.output, upstreamResult.upstreamJson?.choices?.[0]?.finish_reason || null),
   });
-  sendJson(res, 200, response);
+  
+    sendJson(res, 200, response);
 }
 
 async function handleResponsesCompact(req, res) {
@@ -4358,7 +4420,11 @@ function isMockReasoningSummaryMode() {
 }
 
 function toolCallDisplayName(toolCall) {
-  return toolCall?.name || toolCall?.function?.name || toolCall?.tool_name || "";
+  const name = toolCall?.name || toolCall?.function?.name || toolCall?.tool_name || "";
+  if (name && name.startsWith("apply_patch") && proxyActionFromUpstreamName(name)) {
+    return "apply_patch";
+  }
+  return name;
 }
 
 function shouldEmitMockSummaryForTools(toolCalls) {
@@ -4399,6 +4465,71 @@ function formatCodexVisibleReasoningSummary(summary, { toolCalls = [], title = "
   if (!body) return "";
   if (codexReasoningSummaryHasVisibleBody(body)) return body;
   return `**${title || codexReasoningSummaryTitle(toolCalls)}**\n\n${body}`;
+}
+
+
+
+// === apply_patch proxy reconstruction ===
+function reconstructApplyPatchInput(spec, rawArguments) {
+  try {
+    var args = JSON.parse(rawArguments);
+  } catch (e) { return null; }
+  var action = spec.proxyAction;
+  if (!action) return null;
+  switch (action) {
+    case "add_file": return buildAddFilePatch(args.path, args.content);
+    case "delete_file": return buildDeleteFilePatch(args.path);
+    case "update_file": return buildUpdateFilePatch(args.path, args.hunks, args.move_to);
+    case "replace_file": return buildReplaceFilePatch(args.path, args.content);
+    case "batch": return buildBatchPatch(args.operations);
+    default: return null;
+  }
+}
+function buildAddFilePatch(path, content) {
+  if (!path) return null;
+  var c = String(content || "");
+  var lines = c.split("\n");
+  var result = "*** Begin Patch\n*** Add File: " + path.trim() + "\n";
+  for (var i = 0; i < lines.length; i++) result += "+" + lines[i] + (i < lines.length - 1 ? "\n" : "");
+  return result + "\n*** End Patch";
+}
+function buildDeleteFilePatch(path) {
+  if (!path) return null;
+  return "*** Begin Patch\n*** Delete File: " + path.trim() + "\n*** End Patch";
+}
+function buildUpdateFilePatch(path, hunks, moveTo) {
+  if (!path) return null;
+  var result = "*** Begin Patch\n*** Update File: " + path.trim() + "\n";
+  if (moveTo) result += "*** Move to: " + String(moveTo).trim() + "\n";
+  for (var hi = 0; hi < (hunks || []).length; hi++) {
+    var h = hunks[hi];
+    result += "@@ " + (h.context || "") + "\n";
+    for (var li = 0; li < (h.lines || []).length; li++) {
+      var l = h.lines[li];
+      result += (l.op || " ") + (l.text || "") + "\n";
+    }
+  }
+  return result + "*** End Patch";
+}
+function buildReplaceFilePatch(path, content) {
+  if (!path) return null;
+  return buildDeleteFilePatch(path).replace("*** End Patch", "") + "*** Add File: " + path.trim() + "\n+" + String(content || "").replace(/\n/g, "\n+") + "\n*** End Patch";
+}
+function buildBatchPatch(operations) {
+  if (!Array.isArray(operations) || operations.length === 0) return null;
+  if (operations.length > 50) { bridgeLog("apply_patch_batch_too_large", { count: operations.length }); return null; }
+  var result = "*** Begin Patch\n";
+  for (var oi = 0; oi < operations.length; oi++) {
+    var op = operations[oi];
+    switch (op.type) {
+      case "add_file": result += "*** Add File: " + String(op.path || "").trim() + "\n"; if (op.content) result += "+" + String(op.content).replace(/\n/g, "\n+") + "\n"; break;
+      case "delete_file": result += "*** Delete File: " + String(op.path || "").trim() + "\n"; break;
+      case "update_file": result += buildUpdateFilePatch(op.path, op.hunks, op.move_to).replace("*** Begin Patch\n", "").replace("\n*** End Patch", "\n"); break;
+      case "replace_file": result += "*** Delete File: " + String(op.path || "").trim() + "\n*** Add File: " + String(op.path || "").trim() + "\n"; if (op.content) result += "+" + String(op.content).replace(/\n/g, "\n+") + "\n"; break;
+      default: bridgeLog("apply_patch_batch_unknown_type", { type: op.type }); continue;
+    }
+  }
+  return result + "*** End Patch";
 }
 
 function toolSummarySurfaceIsCommentary() {
@@ -4857,7 +4988,7 @@ async function maybeHandleMockFault(fault, res, body, model) {
 
 async function handleMockChat(req, res) {
   const body = await readJson(req);
-  const model = body.model || "deepseek-v4-pro";
+  const model = "deepseek-v4-pro";
   const stream = Boolean(body.stream);
   const finalText = mockText();
   mockLog("received /v1/chat/completions", {
